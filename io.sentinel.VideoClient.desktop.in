@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Sentinel Video Client
+Comment=GTK video surveillance client
+Exec=/usr/bin/python3 "@APP_PATH@"
+Icon=io.sentinel.VideoClient
+Terminal=false
+Categories=AudioVideo;Video;Security;
+StartupNotify=true

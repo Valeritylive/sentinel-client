@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+data/
+.venv/
+build/
+dist/
+AppDir/
+*.deb
+*.AppImage
+
+# Third-party Hikvision SDKs, plugins, and demo media are not part of this project.
+EN-HCNetSDKV6.1.9.4_build20220412_linux64.zip
+HikvisionPluginV2.4.1.4build20260831.zip
+WebSDK V3.3.1.zip
+HikCentral-Lite-Introduction-Video.mp4

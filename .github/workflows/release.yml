@@ -1,0 +1,61 @@
+name: Build Linux packages
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils desktop-file-utils fakeroot libgdk-pixbuf2.0-dev \
+            patchelf python3-pip python3-setuptools squashfs-tools strace \
+            util-linux zsync
+          python3 -m pip install --user appimage-builder==1.1.0
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build .deb and AppImage
+        run: packaging/build-release.sh
+
+      - name: Check release tag version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          test "${GITHUB_REF_NAME#v}" = "$(cat VERSION)" || {
+            echo "Release tag must match VERSION ($(cat VERSION))." >&2
+            exit 1
+          }
+
+      - name: Validate Debian package metadata
+        run: |
+          dpkg-deb --info sentinel_*.deb
+          sed 's|@APP_PATH@|/usr/lib/sentinel/app.py|g' io.sentinel.VideoClient.desktop.in > /tmp/io.sentinel.VideoClient.desktop
+          desktop-file-validate /tmp/io.sentinel.VideoClient.desktop
+          mkdir -p /tmp/sentinel-appimage
+          sed 's|^Exec=.*|Exec=usr/bin/python3 opt/sentinel/app.py|' io.sentinel.VideoClient.desktop.in \
+            | sed 's|@APP_PATH@|opt/sentinel/app.py|g' > /tmp/sentinel-appimage/io.sentinel.VideoClient.desktop
+          desktop-file-validate /tmp/sentinel-appimage/io.sentinel.VideoClient.desktop
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            sentinel_*.deb
+            Sentinel-*-x86_64.AppImage
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" sentinel_*.deb Sentinel-*-x86_64.AppImage --generate-notes

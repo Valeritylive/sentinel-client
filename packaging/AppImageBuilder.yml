@@ -1,0 +1,45 @@
+version: 1
+
+script:
+  - mkdir -p "$TARGET_APPDIR/opt/sentinel" "$TARGET_APPDIR/usr/share/applications" "$TARGET_APPDIR/usr/share/icons/hicolor/scalable/apps"
+  - install -m 0644 "$SOURCE_DIR/app.py" "$TARGET_APPDIR/opt/sentinel/app.py"
+  - install -m 0644 "$SOURCE_DIR/sentinel_storage.py" "$TARGET_APPDIR/opt/sentinel/sentinel_storage.py"
+  - install -m 0644 "$SOURCE_DIR/sentinel_protocols.py" "$TARGET_APPDIR/opt/sentinel/sentinel_protocols.py"
+  - install -m 0644 "$SOURCE_DIR/io.sentinel.VideoClient.svg" "$TARGET_APPDIR/usr/share/icons/hicolor/scalable/apps/io.sentinel.VideoClient.svg"
+  - sed 's|^Exec=.*|Exec=usr/bin/python3 opt/sentinel/app.py|' "$SOURCE_DIR/io.sentinel.VideoClient.desktop.in" | sed 's|@APP_PATH@|opt/sentinel/app.py|g' > "$TARGET_APPDIR/usr/share/applications/io.sentinel.VideoClient.desktop"
+
+AppDir:
+  path: ./AppDir
+  app_info:
+    id: io.sentinel.VideoClient
+    name: Sentinel Video Client
+    icon: io.sentinel.VideoClient
+    version: "{{APP_VERSION}}"
+    exec: usr/bin/python3
+    exec_args: '${APPDIR}/opt/sentinel/app.py'
+  apt:
+    arch: [amd64]
+    include:
+      - python3
+      - python3-gi
+      - gir1.2-gtk-4.0
+      - gir1.2-gstreamer-1.0
+      - gstreamer1.0-plugins-base
+      - gstreamer1.0-plugins-good
+      - gstreamer1.0-plugins-bad
+      - gstreamer1.0-libav
+      - ffmpeg
+      - libsecret-tools
+  runtime:
+    env:
+      PYTHONHOME: '${APPDIR}/usr'
+      PYTHONPATH: '${APPDIR}/usr/lib/python3/dist-packages:${APPDIR}/opt/sentinel'
+      GI_TYPELIB_PATH: '${APPDIR}/usr/lib/x86_64-linux-gnu/girepository-1.0'
+      GST_PLUGIN_PATH_1_0: '${APPDIR}/usr/lib/x86_64-linux-gnu/gstreamer-1.0'
+      GST_PLUGIN_SCANNER: '${APPDIR}/usr/libexec/gstreamer1.0/gst-plugin-scanner'
+    path_mappings:
+      - /usr:$APPDIR/usr
+
+AppImage:
+  arch: x86_64
+  file_name: 'Sentinel-{{APP_VERSION}}-x86_64.AppImage'
