@@ -5,6 +5,7 @@ script:
   - install -m 0644 "$SOURCE_DIR/app.py" "$TARGET_APPDIR/opt/sentinel/app.py"
   - install -m 0644 "$SOURCE_DIR/sentinel_storage.py" "$TARGET_APPDIR/opt/sentinel/sentinel_storage.py"
   - install -m 0644 "$SOURCE_DIR/sentinel_protocols.py" "$TARGET_APPDIR/opt/sentinel/sentinel_protocols.py"
+  - install -m 0644 "$SOURCE_DIR/VERSION" "$TARGET_APPDIR/opt/sentinel/VERSION"
   - install -m 0644 "$SOURCE_DIR/io.sentinel.VideoClient.svg" "$TARGET_APPDIR/usr/share/icons/hicolor/scalable/apps/io.sentinel.VideoClient.svg"
   - sed 's|^Exec=.*|Exec=usr/bin/python3 opt/sentinel/app.py|' "$SOURCE_DIR/io.sentinel.VideoClient.desktop.in" | sed 's|@APP_PATH@|opt/sentinel/app.py|g' > "$TARGET_APPDIR/usr/share/applications/io.sentinel.VideoClient.desktop"
 
@@ -19,6 +20,10 @@ AppDir:
     exec_args: '${APPDIR}/opt/sentinel/app.py'
   apt:
     arch: [amd64]
+    sources:
+      - sourceline: 'deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse'
+      - sourceline: 'deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse'
+      - sourceline: 'deb [arch=amd64] http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse'
     include:
       - python3
       - python3-gi

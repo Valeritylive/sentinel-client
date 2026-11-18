@@ -63,6 +63,7 @@ from sentinel_storage import (
 )
 
 APP_ID = "io.sentinel.VideoClient"
+APP_VERSION = Path(__file__).resolve().parent.joinpath("VERSION").read_text(encoding="utf-8").strip()
 ROOT = Path(__file__).resolve().parent
 Gst.init(None)
 
@@ -205,7 +206,7 @@ class SentinelWindow(Gtk.ApplicationWindow):
         footer.set_valign(Gtk.Align.END)
         footer.set_vexpand(True)
         footer.append(make_label("Linux video management", "muted"))
-        footer.append(make_label("SENTINEL / 0.2.0", "small-caps"))
+        footer.append(make_label(f"SENTINEL / {APP_VERSION}", "small-caps"))
         footer.set_margin_start(10)
         sidebar.append(footer)
 
