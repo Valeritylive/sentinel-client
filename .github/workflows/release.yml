@@ -22,7 +22,7 @@ jobs:
             binutils desktop-file-utils fakeroot libgdk-pixbuf2.0-dev \
             patchelf python3-pip python3-setuptools squashfs-tools strace \
             util-linux zsync
-          python3 -m pip install --user appimage-builder==1.1.0
+          python3 -m pip install --user appimage-builder==1.1.0 packaging==21.3
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run unit tests

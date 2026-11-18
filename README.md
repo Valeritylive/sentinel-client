@@ -20,7 +20,7 @@ python3 app.py
 
 ## Установка пакетов
 
-Релизные `.deb` и AppImage собираются GitHub Actions для x86_64. Debian-пакет устанавливает системные компоненты GTK и GStreamer через зависимости пакета; рецепт AppImage включает Python, GTK, GStreamer, Secret Service CLI и FFmpeg из Ubuntu 22.04. Видеодрайверы и системную службу Secret Service предоставляет рабочее окружение. Для публикации релиза создайте и отправьте тег, совпадающий с файлом `VERSION` (например, `v0.1.3`) — workflow проверит unit-тесты, соберёт пакеты и прикрепит их к GitHub Release. Сборку локально можно запустить на Ubuntu 22.04 с установленными `dpkg-deb`, `python3-pip` и зависимостями AppImageBuilder:
+Релизные `.deb` и AppImage собираются GitHub Actions для x86_64. Debian-пакет устанавливает системные компоненты GTK и GStreamer через зависимости пакета; рецепт AppImage включает Python, GTK, GStreamer, Secret Service CLI и FFmpeg из Ubuntu 22.04. Видеодрайверы и системную службу Secret Service предоставляет рабочее окружение. Для публикации релиза создайте и отправьте тег, совпадающий с файлом `VERSION` (например, `v0.1.4`) — workflow проверит unit-тесты, соберёт пакеты и прикрепит их к GitHub Release. Сборку локально можно запустить на Ubuntu 22.04 с установленными `dpkg-deb`, `python3-pip` и зависимостями AppImageBuilder (`appimage-builder==1.1.0`, `packaging==21.3`):
 
 ```sh
 packaging/build-release.sh
