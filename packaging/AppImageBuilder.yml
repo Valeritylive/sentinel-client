@@ -1,13 +1,14 @@
 version: 1
 
 script:
+  - PROJECT_ROOT="$(CDPATH= cd -- "$SOURCE_DIR/.." && pwd)"
   - mkdir -p "$TARGET_APPDIR/opt/sentinel" "$TARGET_APPDIR/usr/share/applications" "$TARGET_APPDIR/usr/share/icons/hicolor/scalable/apps"
-  - install -m 0644 "$SOURCE_DIR/app.py" "$TARGET_APPDIR/opt/sentinel/app.py"
-  - install -m 0644 "$SOURCE_DIR/sentinel_storage.py" "$TARGET_APPDIR/opt/sentinel/sentinel_storage.py"
-  - install -m 0644 "$SOURCE_DIR/sentinel_protocols.py" "$TARGET_APPDIR/opt/sentinel/sentinel_protocols.py"
-  - install -m 0644 "$SOURCE_DIR/VERSION" "$TARGET_APPDIR/opt/sentinel/VERSION"
-  - install -m 0644 "$SOURCE_DIR/io.sentinel.VideoClient.svg" "$TARGET_APPDIR/usr/share/icons/hicolor/scalable/apps/io.sentinel.VideoClient.svg"
-  - sed 's|^Exec=.*|Exec=usr/bin/python3 opt/sentinel/app.py|' "$SOURCE_DIR/io.sentinel.VideoClient.desktop.in" | sed 's|@APP_PATH@|opt/sentinel/app.py|g' > "$TARGET_APPDIR/usr/share/applications/io.sentinel.VideoClient.desktop"
+  - install -m 0644 "$PROJECT_ROOT/app.py" "$TARGET_APPDIR/opt/sentinel/app.py"
+  - install -m 0644 "$PROJECT_ROOT/sentinel_storage.py" "$TARGET_APPDIR/opt/sentinel/sentinel_storage.py"
+  - install -m 0644 "$PROJECT_ROOT/sentinel_protocols.py" "$TARGET_APPDIR/opt/sentinel/sentinel_protocols.py"
+  - install -m 0644 "$PROJECT_ROOT/VERSION" "$TARGET_APPDIR/opt/sentinel/VERSION"
+  - install -m 0644 "$PROJECT_ROOT/io.sentinel.VideoClient.svg" "$TARGET_APPDIR/usr/share/icons/hicolor/scalable/apps/io.sentinel.VideoClient.svg"
+  - sed 's|^Exec=.*|Exec=usr/bin/python3 opt/sentinel/app.py|' "$PROJECT_ROOT/io.sentinel.VideoClient.desktop.in" | sed 's|@APP_PATH@|opt/sentinel/app.py|g' > "$TARGET_APPDIR/usr/share/applications/io.sentinel.VideoClient.desktop"
 
 AppDir:
   path: ./AppDir

@@ -25,6 +25,9 @@ jobs:
           python3 -m pip install --user appimage-builder==1.1.0
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Run unit tests
+        run: python3 -m unittest discover -s tests -v
+
       - name: Build .deb and AppImage
         run: packaging/build-release.sh
 
