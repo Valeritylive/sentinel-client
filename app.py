@@ -6,7 +6,6 @@ import csv
 import html
 import http.client
 import json
-import signal
 import shutil
 import sqlite3
 import subprocess
@@ -45,14 +44,29 @@ except ImportError as exc:
         "Установите gir1.2-gtk-4.0 и gir1.2-gstreamer-1.0."
     ) from exc
 
+import sentinel_devmgmt as devmgmt
+import sentinel_layouts as layouts
+import sentinel_shell as shell
 from sentinel_protocols import (
+    FfmpegJob,
     authenticated_opener,
+    build_time_xml,
     iter_alert_payloads,
     parse_channel_ids,
+    parse_channel_names,
+    parse_device_info,
+    parse_device_time,
     parse_streaming_channel_ids,
+    set_allow_insecure_basic,
 )
 from sentinel_storage import (
     DATA,
+    add_group,
+    delete_group,
+    load_custom_divisions,
+    load_groups,
+    rename_group,
+    set_device_group,
     CredentialStoreError,
     database,
     delete_saved_credentials,
@@ -65,33 +79,44 @@ from sentinel_storage import (
 APP_ID = "io.sentinel.VideoClient"
 APP_VERSION = Path(__file__).resolve().parent.joinpath("VERSION").read_text(encoding="utf-8").strip()
 ROOT = Path(__file__).resolve().parent
+# Hikvision sends a keep-alive roughly every 10 s; a short socket timeout kills a healthy alert stream.
+ALARM_READ_TIMEOUT = 45
+ALARM_RECONNECT_MIN = 2
+ALARM_RECONNECT_MAX = 60
 Gst.init(None)
 
 
 def stylesheet():
     css = b"""
-    window, .background { background: #101312; color: #edf2ee; }
-    headerbar { background: #141816; border-bottom: 1px solid #2b322e; }
-    .sidebar { background: #141816; border-right: 1px solid #2b322e; padding: 18px 12px; }
-    .brand { font-size: 18px; font-weight: 800; padding: 8px 12px 22px; color: #edf2ee; }
-    .brand-mark { color: #c6f36a; }
-    .nav-button { min-height: 42px; border-radius: 8px; }
-    .nav-button:checked { background: #29302b; color: #c6f36a; }
-    .eyebrow { color: #c6f36a; font-size: 10px; letter-spacing: 1.5px; font-weight: 700; }
-    .page-title { font-size: 26px; font-weight: 750; }
-    .muted { color: #87918b; }
-    .stat-card { background: #171b19; border: 1px solid #2b322e; border-radius: 12px; padding: 15px; }
-    .stat-label { color: #87918b; font-size: 10px; letter-spacing: 1px; }
-    .stat-number { font-size: 27px; font-weight: 750; }
-    .camera-tile { background: #19201c; border: 1px solid #37413a; border-radius: 10px; }
-    .camera-tile:hover { border-color: #c6f36a; }
-    .camera-tile.selected { border: 2px solid #e24840; }
-    .archive-controls { background: alpha(#101312, 0.92); border: 1px solid #37413a; border-radius: 8px; padding: 6px; }
-    .section-card { background: #171b19; border: 1px solid #2b322e; border-radius: 12px; }
-    .section-heading { font-weight: 700; padding: 13px 15px; border-bottom: 1px solid #2b322e; }
-    button.suggested-action { background: #c6f36a; color: #141a12; font-weight: 700; }
-    entry, spinbutton, dropdown, textview { background: #101411; color: #edf2ee; border-color: #374039; }
-    .small-caps { color: #7d8880; font-size: 10px; letter-spacing: 1.2px; }
+    window, .background { background: #2a2c31; color: #e6e7ea; }
+    headerbar { background: #0f1012; border-bottom: 1px solid #000; min-height: 38px; color: #e6e7ea; box-shadow: none; }
+    headerbar button { color: #e6e7ea; background: transparent; border: none; box-shadow: none; }
+    headerbar button:hover { background: #26282d; }
+    .home-tab:checked, .ivms-tab-button:checked { background: #e8232c; color: #fff; }
+    .ivms-tab { background: #1b1d21; border-radius: 3px; margin: 4px 1px; }
+    .ivms-tab-close { min-width: 18px; min-height: 18px; padding: 0 4px; opacity: 0.7; }
+    .statusbar { background: #0f1012; border-top: 1px solid #000; padding: 3px 12px; color: #9a9ca3; font-size: 11px; }
+    .status-alarm { color: #e8232c; font-weight: 700; }
+    .home-tile { background: #212327; border: 1px solid #3a3c42; border-radius: 6px; padding: 22px 10px; min-width: 150px; }
+    .home-tile:hover { background: #2f3238; border-color: #e8232c; }
+    .tile-icon { font-size: 34px; color: #e8232c; }
+    .tile-title { font-size: 13px; }
+    .home-section { color: #9a9ca3; font-size: 12px; font-weight: 700; letter-spacing: 1px; }
+    .eyebrow { color: #e8232c; font-size: 10px; letter-spacing: 1.5px; font-weight: 700; }
+    .page-title { font-size: 24px; font-weight: 700; }
+    .muted { color: #8e9097; }
+    .stat-card { background: #212327; border: 1px solid #3a3c42; border-radius: 6px; padding: 15px; }
+    .stat-label { color: #8e9097; font-size: 10px; letter-spacing: 1px; }
+    .stat-number { font-size: 27px; font-weight: 700; }
+    .camera-tile { background: #5d5f66; border: 1px solid #3a3c42; border-radius: 0; }
+    .camera-tile:hover { border-color: #e8232c; }
+    .camera-tile.selected { border: 2px solid #e8232c; }
+    .archive-controls { background: alpha(#0f1012, 0.92); border: 1px solid #3a3c42; border-radius: 4px; padding: 6px; }
+    .section-card { background: #212327; border: 1px solid #3a3c42; border-radius: 6px; }
+    .section-heading { font-weight: 700; padding: 13px 15px; border-bottom: 1px solid #3a3c42; }
+    button.suggested-action { background: #e8232c; color: #fff; font-weight: 700; }
+    entry, spinbutton, dropdown, textview { background: #1b1d21; color: #e6e7ea; border-color: #3a3c42; }
+    .small-caps { color: #8e9097; font-size: 10px; letter-spacing: 1.2px; }
     """
     provider = Gtk.CssProvider()
     provider.load_from_data(css)
@@ -121,6 +146,8 @@ class SentinelWindow(Gtk.ApplicationWindow):
             settings = {row["key"]: row["value"] for row in db.execute("SELECT key,value FROM app_settings")}
         self.capture_folder = Path(settings.get("capture_folder", str(self.capture_folder))).expanduser()
         self.record_folder = Path(settings.get("record_folder", str(self.record_folder))).expanduser()
+        self.allow_insecure_basic = settings.get("allow_insecure_basic") == "1"
+        set_allow_insecure_basic(self.allow_insecure_basic)
         self.streams = {}
         self.maximized_slot = None
         self.monitor_windows = []
@@ -161,55 +188,29 @@ class SentinelWindow(Gtk.ApplicationWindow):
         height = min(geometry.height, max(360, int(geometry.height * 0.9)), max_height)
         return width, height
 
+    _STATUS_REFRESH_PAGES = ("dashboard", "devices")
+
     def _build_window(self):
+        self.tab_model = shell.TabModel()
+        self._tab_guard = False
+        self.tab_widgets = {}
         header = Gtk.HeaderBar()
-        self.navigation_toggle = Gtk.ToggleButton(label="☰")
-        self.navigation_toggle.set_active(True)
-        self.navigation_toggle.set_tooltip_text("Скрыть меню разделов")
-        self.navigation_toggle.connect("toggled", self._toggle_navigation_panel)
-        header.pack_start(self.navigation_toggle)
-        header.set_title_widget(Gtk.Label(label="Центр управления безопасностью"))
-        state = Gtk.Label(label="● Локальная система активна")
-        state.add_css_class("muted")
-        header.pack_end(state)
+        header.set_show_title_buttons(True)
+        home = Gtk.ToggleButton(label="⌂")
+        home.add_css_class("home-tab")
+        home.set_tooltip_text("Главная")
+        home.connect("toggled", self._on_tab_toggled, shell.HOME)
+        self.nav_buttons[shell.HOME] = home
+        header.pack_start(home)
+        self.tab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        header.pack_start(self.tab_box)
+        header.set_title_widget(Gtk.Label(label=""))
+        version = Gtk.Label(label=f"Sentinel {APP_VERSION}")
+        version.add_css_class("muted")
+        header.pack_end(version)
         self.set_titlebar(header)
 
-        shell = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-        sidebar.set_size_request(176, -1)
-        sidebar.add_css_class("sidebar")
-        brand = Gtk.Label()
-        brand.set_markup('<span foreground="#c6f36a">◈</span> <b>sentinel</b>')
-        brand.set_xalign(0)
-        brand.add_css_class("brand")
-        sidebar.append(brand)
-        section = make_label("РАБОЧЕЕ МЕСТО", "small-caps")
-        section.set_margin_start(10)
-        section.set_margin_bottom(7)
-        sidebar.append(section)
-        for key, title, icon in (
-            ("dashboard", "Обзор системы", "⌂"),
-            ("overview", "Видеонаблюдение", "▦"),
-            ("archive", "Архив видео", "◷"),
-            ("access", "Контроль доступа", "▣"),
-            ("alarms", "Центр событий", "⚑"),
-            ("emap", "Карты объектов", "⌖"),
-            ("devices", "Устройства", "◉"),
-        ):
-            button = Gtk.ToggleButton(label=f"{icon}   {title}")
-            button.add_css_class("nav-button")
-            button.set_halign(Gtk.Align.FILL)
-            button.connect("toggled", self._navigate, key)
-            self.nav_buttons[key] = button
-            sidebar.append(button)
-        footer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        footer.set_valign(Gtk.Align.END)
-        footer.set_vexpand(True)
-        footer.append(make_label("Linux video management", "muted"))
-        footer.append(make_label(f"SENTINEL / {APP_VERSION}", "small-caps"))
-        footer.set_margin_start(10)
-        sidebar.append(footer)
-
+        self.stack.add_named(self._home_page(), shell.HOME)
         self.stack.add_named(self._dashboard_page(), "dashboard")
         self.stack.add_named(self._overview_page(), "overview")
         self.stack.add_named(self._devices_page(), "devices")
@@ -217,56 +218,178 @@ class SentinelWindow(Gtk.ApplicationWindow):
         self.stack.add_named(self._alarms_page(), "alarms")
         self.stack.add_named(self._emap_page(), "emap")
         self.stack.add_named(self._access_page(), "access")
-        sidebar_revealer = Gtk.Revealer()
-        sidebar_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_LEFT)
-        sidebar_revealer.set_transition_duration(180)
-        sidebar_revealer.set_reveal_child(True)
-        sidebar_revealer.set_child(sidebar)
-        sidebar_revealer.set_size_request(0, -1)
-        shell.append(sidebar_revealer)
-        self.sidebar_revealer = sidebar_revealer
+        for item in shell.MODULES:
+            if item.page is None:
+                self.stack.add_named(self._stub_page(item), shell.page_name(item.key))
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         content_scroll = Gtk.ScrolledWindow()
         content_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         content_scroll.set_child(self.stack)
         content_scroll.set_hexpand(True)
         content_scroll.set_vexpand(True)
-        shell.append(content_scroll)
-        self.set_child(shell)
+        root.append(content_scroll)
+        root.append(self._status_bar())
+        self.set_child(root)
         self.connect("close-request", self._on_close)
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key_pressed)
         self.add_controller(keys)
-        self.nav_buttons["dashboard"].set_active(True)
-        self.stack.set_visible_child_name("dashboard")
+        self._activate_tab(shell.HOME)
+        GLib.timeout_add_seconds(1, self._tick_clock)
 
-    def _toggle_navigation_panel(self, button):
-        show_panel = button.get_active()
-        self.sidebar_revealer.set_reveal_child(show_panel)
-        self.sidebar_revealer.set_size_request(176 if show_panel else 0, -1)
-        button.set_tooltip_text("Скрыть меню разделов" if show_panel else "Показать меню разделов")
+    def _home_page(self):
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=22)
+        for margin in ("top", "bottom", "start", "end"):
+            getattr(outer, f"set_margin_{margin}")(28)
+        for title, items in shell.sections():
+            outer.append(make_label(title.upper(), "home-section"))
+            flow = Gtk.FlowBox()
+            flow.set_selection_mode(Gtk.SelectionMode.NONE)
+            flow.set_max_children_per_line(6)
+            flow.set_min_children_per_line(2)
+            flow.set_row_spacing(12)
+            flow.set_column_spacing(12)
+            flow.set_homogeneous(True)
+            for item in items:
+                tile = Gtk.Button()
+                tile.add_css_class("home-tile")
+                box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+                icon = Gtk.Label(label=item.icon)
+                icon.add_css_class("tile-icon")
+                caption = Gtk.Label(label=item.title)
+                caption.add_css_class("tile-title")
+                caption.set_wrap(True)
+                caption.set_justify(Gtk.Justification.CENTER)
+                box.append(icon)
+                box.append(caption)
+                tile.set_child(box)
+                tile.connect("clicked", lambda _b, key=item.key: self._show_module(key))
+                flow.append(tile)
+            outer.append(flow)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_child(outer)
+        return scroll
 
-    def _navigate(self, button, key):
+    def _stub_page(self, item):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_valign(Gtk.Align.CENTER)
+        box.set_halign(Gtk.Align.CENTER)
+        icon = Gtk.Label(label=item.icon)
+        icon.add_css_class("tile-icon")
+        box.append(icon)
+        box.append(make_label(item.title, "page-title"))
+        box.append(make_label("Модуль появится в одной из следующих версий.", "muted"))
+        return box
+
+    def _status_bar(self):
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=18)
+        bar.add_css_class("statusbar")
+        self.status_alarm = Gtk.Label(label="⚑ 0")
+        self.status_devices = Gtk.Label(label="Устройств: 0")
+        self.status_streams = Gtk.Label(label="Потоков: 0")
+        self.status_clock = Gtk.Label(label="")
+        for label in (self.status_alarm, self.status_devices, self.status_streams):
+            bar.append(label)
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        bar.append(spacer)
+        bar.append(self.status_clock)
+        self._tick_clock()
+        return bar
+
+    def _tick_clock(self):
+        if getattr(self, "_closing", False):
+            return False
+        self.status_clock.set_text(datetime.now().strftime("%d.%m.%Y  %H:%M:%S"))
+        return True
+
+    def _update_status_bar(self):
+        if not hasattr(self, "status_devices"):
+            return
+        streams = len(self.streams) + sum(len(w.streams) for w in getattr(self, "monitor_windows", []))
+        events = len(getattr(self, "alarm_events", []))
+        self.status_devices.set_text(f"Устройств: {len(getattr(self, 'devices', []))}")
+        self.status_streams.set_text(f"Потоков: {streams}")
+        self.status_alarm.set_text(f"⚑ {events}")
+        if events:
+            self.status_alarm.add_css_class("status-alarm")
+        else:
+            self.status_alarm.remove_css_class("status-alarm")
+
+    @staticmethod
+    def _module_key(key):
+        """Принимает ключ вкладки или прежнее имя страницы (overview, archive…)."""
+        if key == shell.HOME or shell.module(key):
+            return key
+        for item in shell.MODULES:
+            if item.page == key:
+                return item.key
+        return shell.HOME
+
+    def _ensure_tab(self, key):
+        if key == shell.HOME or key in self.tab_widgets:
+            return
+        item = shell.module(key)
+        tab = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        tab.add_css_class("ivms-tab")
+        button = Gtk.ToggleButton(label=item.title)
+        button.add_css_class("ivms-tab-button")
+        button.connect("toggled", self._on_tab_toggled, key)
+        close = Gtk.Button(label="✕")
+        close.add_css_class("ivms-tab-close")
+        close.connect("clicked", lambda _b, tab_key=key: self._close_tab(tab_key))
+        tab.append(button)
+        tab.append(close)
+        self.tab_box.append(tab)
+        self.tab_widgets[key] = tab
+        self.nav_buttons[key] = button
+
+    def _on_tab_toggled(self, button, key):
+        if self._tab_guard:
+            return
         if button.get_active():
-            for other_key, other in self.nav_buttons.items():
-                if other_key != key:
-                    other.set_active(False)
-            self._place_camera_area_in_archive(key == "archive")
-            self.stack.set_visible_child_name(key)
-            if key in ("dashboard", "devices"):
-                self.refresh()
-            elif key == "archive":
-                self._refresh_archive_choices()
-            elif key == "emap":
-                self._refresh_maps()
-            elif key == "access":
-                self._refresh_archive_choices()
+            self._activate_tab(key)
+        else:
+            self._sync_tab_buttons()  # активную вкладку нельзя «выключить»
+
+    def _sync_tab_buttons(self):
+        self._tab_guard = True
+        try:
+            for key, button in self.nav_buttons.items():
+                button.set_active(key == self.tab_model.active)
+        finally:
+            self._tab_guard = False
+
+    def _activate_tab(self, key):
+        key = self._module_key(key)
+        self.tab_model.open(key)
+        self._ensure_tab(key)
+        self._sync_tab_buttons()
+        page = shell.page_name(key)
+        self._place_camera_area_in_archive(page == "archive")
+        self.stack.set_visible_child_name(page)
+        if page in self._STATUS_REFRESH_PAGES:
+            self.refresh()
+        elif page == "archive":
+            self._refresh_archive_choices()
+        elif page == "emap":
+            self._refresh_maps()
+        elif page == "access":
+            self._refresh_archive_choices()
+
+    def _close_tab(self, key):
+        was_active = self.tab_model.active == key
+        target = self.tab_model.close(key)
+        tab = self.tab_widgets.pop(key, None)
+        if tab is not None:
+            self.tab_box.remove(tab)
+        self.nav_buttons.pop(key, None)
+        if was_active:
+            self._activate_tab(target)
 
     def _show_module(self, key):
-        button = self.nav_buttons.get(key)
-        if button:
-            button.set_active(True)
-        self._place_camera_area_in_archive(key == "archive")
-        self.stack.set_visible_child_name(key)
+        self._activate_tab(key)
 
     def _place_camera_area_in_archive(self, in_archive):
         camera_area = getattr(self, "camera_area", None)
@@ -401,20 +524,19 @@ class SentinelWindow(Gtk.ApplicationWindow):
         resources.set_size_request(210, -1)
         resources.add_css_class("section-card")
         resources.append(make_label("Вид", "section-heading"))
-        layouts = Gtk.FlowBox()
-        layouts.set_selection_mode(Gtk.SelectionMode.NONE)
-        layouts.set_max_children_per_line(4)
-        layouts.set_min_children_per_line(2)
-        layouts.set_column_spacing(3)
-        layouts.set_row_spacing(3)
-        layouts.set_margin_start(10)
-        for count, label in ((1, "▣"), (4, "▦"), (9, "▦"), (16, "▦"),
-                             (25, "▦"), (36, "▦"), (49, "▦"), (64, "▦")):
-            button = Gtk.Button(label=label + f" {count}")
-            button.set_tooltip_text(f"{count}-оконная раскладка")
-            button.connect("clicked", self._set_layout, count)
-            layouts.append(button)
-        resources.append(layouts)
+        layouts_box = Gtk.FlowBox()
+        layouts_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        layouts_box.set_max_children_per_line(4)
+        layouts_box.set_min_children_per_line(2)
+        layouts_box.set_column_spacing(3)
+        layouts_box.set_row_spacing(3)
+        layouts_box.set_margin_start(10)
+        for division in layouts.STANDARD_DIVISIONS:
+            button = Gtk.Button(label=("▣" if division.count == 1 else "▦") + f" {division.count}")
+            button.set_tooltip_text(f"{division.count}-оконное деление")
+            button.connect("clicked", lambda _b, key=division.key: self._set_division(key))
+            layouts_box.append(button)
+        resources.append(layouts_box)
         custom_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         custom_header.append(make_label("Custom View", "section-heading"))
         save_view = Gtk.Button(label="＋")
@@ -529,19 +651,41 @@ class SentinelWindow(Gtk.ApplicationWindow):
         save_view_button.set_tooltip_text("Сохранить текущий вид")
         toolbar.append(save_view_button)
         layout_menu = Gtk.MenuButton(label="▦")
-        layout_menu.set_tooltip_text("Раскладка")
+        layout_menu.set_tooltip_text("Деление окон")
         layout_popover = Gtk.Popover()
-        layout_actions = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        for count in (1, 4, 9, 16, 25, 36, 49, 64):
-            action = Gtk.Button(label=f"{count} окон")
-            action.connect("clicked", lambda _b, n=count: (layout_menu.popdown(), self._set_layout(None, n)))
-            layout_actions.append(action)
+        layout_actions = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        for title, pool in (("Стандартное", layouts.STANDARD_DIVISIONS), ("Широкое", layouts.WIDE_DIVISIONS)):
+            layout_actions.append(make_label(title, "muted"))
+            flow = Gtk.FlowBox()
+            flow.set_selection_mode(Gtk.SelectionMode.NONE)
+            flow.set_max_children_per_line(5)
+            flow.set_min_children_per_line(3)
+            for division in pool:
+                action = Gtk.Button(label=str(division.count))
+                action.set_tooltip_text(f"{division.count} окон" + (" (широкое)" if division.wide else ""))
+                action.connect("clicked", lambda _b, key=division.key:
+                               (layout_menu.popdown(), self._set_division(key)))
+                flow.append(action)
+            layout_actions.append(flow)
         custom_layout = Gtk.Button(label="Настроить сетку…")
         custom_layout.connect("clicked", lambda *_: (layout_menu.popdown(), self.customize_layout()))
         layout_actions.append(custom_layout)
         layout_popover.set_child(layout_actions)
         layout_menu.set_popover(layout_popover)
         toolbar.append(layout_menu)
+        stream_menu = Gtk.MenuButton(label="⇅")
+        stream_menu.set_tooltip_text("Тип потока")
+        stream_popover = Gtk.Popover()
+        stream_actions = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        for title, mode in (("Основной", layouts.STREAM_MAIN), ("Дополнительный", layouts.STREAM_SUB),
+                            ("Третий", layouts.STREAM_THIRD), ("Автоматически", layouts.STREAM_AUTO)):
+            item = Gtk.Button(label=title)
+            item.set_has_frame(False)
+            item.connect("clicked", lambda _b, m=mode: (stream_menu.popdown(), self._set_stream_mode(m)))
+            stream_actions.append(item)
+        stream_popover.set_child(stream_actions)
+        stream_menu.set_popover(stream_popover)
+        toolbar.append(stream_menu)
         settings_menu = Gtk.MenuButton(label="⚙")
         settings_menu.set_tooltip_text("Настройки")
         settings_popover = Gtk.Popover()
@@ -607,8 +751,11 @@ class SentinelWindow(Gtk.ApplicationWindow):
         monitor.set_vexpand(True)
         work.append(monitor)
         page.append(work)
+        self.division = "s4"
+        self.stream_mode = layouts.STREAM_AUTO
         self.layout_count = 4
         self.grid_columns, self.grid_rows = self._default_grid_shape(self.layout_count)
+        self.cell_layout = None
         self.selected_slot = 0
         self.video_slots = []
         self._render_video_grid()
@@ -682,34 +829,325 @@ class SentinelWindow(Gtk.ApplicationWindow):
                 self.audio_button.set_label("🔊" if getattr(self, "compact_audio_button", False) else "🔊 Звук")
 
     def _devices_page(self):
-        page = self._page("КАТАЛОГ", "Устройства", "IP-камеры и видеорегистраторы", self._button("＋  Добавить", self.add_device, primary=True))
-        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        panel.add_css_class("section-card")
-        panel.append(make_label("Устройства", "section-heading"))
-        selection_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        selection_bar.set_margin_start(14)
-        selection_bar.set_margin_end(14)
-        selection_bar.set_margin_top(8)
-        selection_bar.set_margin_bottom(4)
-        self.select_all_devices = Gtk.CheckButton(label="Выбрать все")
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.device_stack = Gtk.Stack()
+        switch = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        switch.set_margin_start(14)
+        switch.set_margin_top(10)
+        self.device_switch_buttons = {}
+        for key, title in (("device", "Устройства"), ("group", "Группы")):
+            button = Gtk.ToggleButton(label=title)
+            button.connect("toggled", self._on_device_switch, key)
+            self.device_switch_buttons[key] = button
+            switch.append(button)
+        root.append(switch)
+        self.device_stack.add_named(self._device_table_page(), "device")
+        self.device_stack.add_named(self._group_page(), "group")
+        self.device_stack.set_vexpand(True)
+        root.append(self.device_stack)
+        self._device_switch_guard = False
+        self.device_switch_buttons["device"].set_active(True)
+        return root
+
+    def _on_device_switch(self, button, key):
+        if self._device_switch_guard:
+            return
+        self._device_switch_guard = True
+        try:
+            for other_key, other in self.device_switch_buttons.items():
+                other.set_active(other_key == key)
+        finally:
+            self._device_switch_guard = False
+        self.device_stack.set_visible_child_name(key)
+
+    def _device_table_page(self):
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        for margin in ("top", "bottom", "start", "end"):
+            getattr(page, f"set_margin_{margin}")(14)
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.device_total_label = make_label("Всего: 0")
+        bar.append(self.device_total_label)
+        self.device_filter = Gtk.SearchEntry()
+        self.device_filter.set_placeholder_text("Фильтр")
+        self.device_filter.connect("search-changed", lambda *_: self._render_device_rows())
+        bar.append(self.device_filter)
+        bar.append(Gtk.Box(hexpand=True))
+        for title, callback in (("Экспорт CSV", self.export_devices_csv), ("Обновить", self.refresh),
+                                ("Удалить", self._confirm_delete_selected_devices)):
+            button = Gtk.Button(label=title)
+            button.connect("clicked", lambda _b, cb=callback: cb())
+            bar.append(button)
+        add = Gtk.Button(label="＋ Добавить")
+        add.add_css_class("suggested-action")
+        add.connect("clicked", lambda *_: self.add_device())
+        bar.append(add)
+        page.append(bar)
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.select_all_devices = Gtk.CheckButton(label="Название")
         self.select_all_devices.connect("toggled", self._toggle_all_device_selection)
-        selection_bar.append(self.select_all_devices)
-        selection_bar.append(Gtk.Box(hexpand=True))
-        delete_selected = Gtk.Button(label="Удалить выбранные")
-        delete_selected.add_css_class("destructive-action")
-        delete_selected.connect("clicked", self._confirm_delete_selected_devices)
-        selection_bar.append(delete_selected)
-        panel.append(selection_bar)
-        self.device_selection_checks = {}
-        self.device_group_checks = []
+        head.append(self.select_all_devices)
+        page.append(head)
+        self.device_row_checks = []
         self._selection_update_guard = False
         self.devices_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
-        self.devices_list.set_margin_start(14)
-        self.devices_list.set_margin_end(14)
-        self.devices_list.set_margin_bottom(12)
-        panel.append(self.devices_list)
-        page.append(panel)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_child(self.devices_list)
+        page.append(scroll)
         return page
+
+    def _render_device_rows(self):
+        self._clear_box(self.devices_list)
+        self.device_row_checks = []
+        self._selection_update_guard = True
+        self.select_all_devices.set_active(False)
+        self._selection_update_guard = False
+        rows = devmgmt.physical_devices(self.devices, self.groups)
+        self.device_total_label.set_text(f"Всего: {len(rows)}")
+        shown = devmgmt.filter_rows(rows, self.device_filter.get_text())
+        self.device_rows_shown = shown
+        if not shown:
+            self.devices_list.append(make_label(
+                "Устройств пока нет. Нажмите «Добавить»." if not rows else "Ничего не найдено.", "muted"))
+        for item in shown:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.add_css_class("section-card")
+            check = Gtk.CheckButton()
+            check.connect("toggled", self._device_selection_changed)
+            self.device_row_checks.append((check, item["ids"]))
+            row.append(check)
+            title = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            title.set_hexpand(True)
+            title.append(make_label(item["name"]))
+            kind = "Hikvision" if item["protocol"] == "hikvision" else "RTSP"
+            title.append(make_label(
+                f"{item['host']} · {kind} · SDK {item['sdk_port']} · HTTP {item['http_port']} · "
+                f"RTSP {item['rtsp_port']}", "muted"))
+            row.append(title)
+            row.append(make_label(f"Каналов: {item['channels']}"))
+            row.append(make_label(item["group_name"] or "—", "muted"))
+            if item["device_model"]:
+                row.append(make_label(item["device_model"], "muted"))
+            delete = Gtk.Button(label="Удалить")
+            delete.connect("clicked", self._confirm_delete_devices, item["ids"],
+                           f"устройство {item['name']} и его каналы")
+            row.append(delete)
+            self.devices_list.append(row)
+
+    def export_devices_csv(self):
+        rows = getattr(self, "device_rows_shown", [])
+        if not rows:
+            self.notify("Нет устройств для экспорта")
+            return
+        chooser = Gtk.FileChooserNative.new("Экспорт устройств", self, Gtk.FileChooserAction.SAVE,
+                                            "Сохранить", "Отмена")
+        chooser.set_current_name("devices.csv")
+        self._device_export_chooser = chooser
+
+        def done(dialog, response):
+            file = dialog.get_file()
+            if response == Gtk.ResponseType.ACCEPT and file and file.get_path():
+                try:
+                    with open(file.get_path(), "w", encoding="utf-8-sig", newline="") as output:
+                        devmgmt.export_csv(rows, output)
+                    self.notify(f"Сохранено: {file.get_path()}")
+                except OSError as exc:
+                    self.notify(f"Не удалось сохранить файл: {exc}")
+            dialog.destroy()
+
+        chooser.connect("response", done)
+        chooser.show()
+
+    def _group_page(self):
+        page = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        for margin in ("top", "bottom", "start", "end"):
+            getattr(page, f"set_margin_{margin}")(14)
+        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        left.add_css_class("section-card")
+        left.set_size_request(280, -1)
+        left.append(make_label("Группы", "section-heading"))
+        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        actions.set_margin_start(10)
+        for title, callback in (("Добавить", self._add_group_dialog), ("Переименовать", self._rename_group_dialog),
+                                ("Удалить", self._delete_group_dialog)):
+            button = Gtk.Button(label=title)
+            button.connect("clicked", lambda _b, cb=callback: cb())
+            actions.append(button)
+        left.append(actions)
+        by_name = Gtk.Button(label="Создать группы по названиям устройств")
+        by_name.set_margin_start(10)
+        by_name.set_margin_end(10)
+        by_name.connect("clicked", lambda *_: self._create_groups_by_device())
+        left.append(by_name)
+        self.group_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.group_list.set_margin_start(10)
+        self.group_list.set_margin_end(10)
+        left.append(self.group_list)
+        page.append(left)
+        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        right.add_css_class("section-card")
+        right.set_hexpand(True)
+        self.group_title = make_label("Выберите группу", "section-heading")
+        right.append(self.group_title)
+        move = Gtk.Button(label="Добавить устройства в группу…")
+        move.set_halign(Gtk.Align.START)
+        move.set_margin_start(10)
+        move.connect("clicked", lambda *_: self._assign_devices_dialog())
+        right.append(move)
+        self.group_members = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.group_members.set_margin_start(10)
+        right.append(self.group_members)
+        page.append(right)
+        self.selected_group_id = None
+        return page
+
+    def _render_groups(self):
+        self._clear_box(self.group_list)
+        valid = {g["id"] for g in self.groups}
+        if self.selected_group_id not in valid:
+            self.selected_group_id = None
+        rows = devmgmt.physical_devices(self.devices, self.groups)
+        counts = {}
+        for item in rows:
+            counts[item["group_id"]] = counts.get(item["group_id"], 0) + 1
+        if not self.groups:
+            self.group_list.append(make_label("Групп пока нет", "muted"))
+        for group in self.groups:
+            button = Gtk.ToggleButton(label=f"{group['name']}  ({counts.get(group['id'], 0)})")
+            button.set_active(group["id"] == self.selected_group_id)
+            button.connect("clicked", lambda _b, gid=group["id"]: self._select_group(gid))
+            self.group_list.append(button)
+        self._clear_box(self.group_members)
+        if self.selected_group_id is None:
+            self.group_title.set_text("Выберите группу")
+            return
+        name = next(g["name"] for g in self.groups if g["id"] == self.selected_group_id)
+        self.group_title.set_text(name)
+        members = [r for r in rows if r["group_id"] == self.selected_group_id]
+        if not members:
+            self.group_members.append(make_label("В группе нет устройств", "muted"))
+        for item in members:
+            line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            line.append(make_label(f"{item['name']} · {item['host']} · каналов: {item['channels']}"))
+            line.append(Gtk.Box(hexpand=True))
+            remove = Gtk.Button(label="Убрать из группы")
+            remove.connect("clicked", lambda _b, ids=item["ids"]: self._set_group_for(ids, None))
+            line.append(remove)
+            self.group_members.append(line)
+
+    def _select_group(self, group_id):
+        self.selected_group_id = group_id
+        self._render_groups()
+
+    def _set_group_for(self, ids, group_id):
+        set_device_group(ids, group_id)
+        self.refresh()
+
+    def _ask_text(self, title, initial, callback):
+        entry = Gtk.Entry(text=initial)
+        for margin in ("top", "bottom", "start", "end"):
+            getattr(entry, f"set_margin_{margin}")(14)
+        dialog = Gtk.Dialog(title=title, transient_for=self, modal=True)
+        dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
+        dialog.add_button("OK", Gtk.ResponseType.ACCEPT)
+        dialog.get_content_area().append(entry)
+
+        def response(dlg, result):
+            text = entry.get_text().strip()
+            dlg.close()
+            if result == Gtk.ResponseType.ACCEPT and text:
+                callback(text)
+
+        dialog.connect("response", response)
+        dialog.present()
+
+    def _add_group_dialog(self):
+        def create(name):
+            self.selected_group_id = add_group(name)
+            self.refresh()
+        self._ask_text("Новая группа", "", create)
+
+    def _rename_group_dialog(self):
+        if self.selected_group_id is None:
+            self.notify("Сначала выберите группу")
+            return
+        current = next(g["name"] for g in self.groups if g["id"] == self.selected_group_id)
+
+        def rename(name):
+            try:
+                rename_group(self.selected_group_id, name)
+            except sqlite3.IntegrityError:
+                self.notify("Группа с таким названием уже есть")
+                return
+            self.refresh()
+        self._ask_text("Переименовать группу", current, rename)
+
+    def _delete_group_dialog(self):
+        if self.selected_group_id is None:
+            self.notify("Сначала выберите группу")
+            return
+        group_id = self.selected_group_id
+        dialog = Gtk.MessageDialog(
+            transient_for=self, modal=True, message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.CANCEL, text="Удалить группу? Устройства останутся в каталоге.")
+        dialog.add_button("Удалить", Gtk.ResponseType.ACCEPT)
+
+        def response(dlg, result):
+            dlg.close()
+            if result == Gtk.ResponseType.ACCEPT:
+                delete_group(group_id)
+                self.selected_group_id = None
+                self.refresh()
+
+        dialog.connect("response", response)
+        dialog.present()
+
+    def _create_groups_by_device(self):
+        rows = devmgmt.physical_devices(self.devices, self.groups)
+        if not rows:
+            self.notify("Нет устройств")
+            return
+        for item in rows:
+            if item["group_id"] is None:
+                set_device_group(item["ids"], add_group(item["name"]))
+        self.refresh()
+
+    def _assign_devices_dialog(self):
+        if self.selected_group_id is None:
+            self.notify("Сначала выберите группу")
+            return
+        rows = devmgmt.physical_devices(self.devices, self.groups)
+        dialog = Gtk.Dialog(title="Устройства для группы", transient_for=self, modal=True)
+        dialog.set_default_size(420, 420)
+        dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Добавить", Gtk.ResponseType.ACCEPT)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        for margin in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{margin}")(14)
+        checks = []
+        for item in rows:
+            if item["group_id"] == self.selected_group_id:
+                continue
+            check = Gtk.CheckButton(label=f"{item['name']} · {item['host']}"
+                                          + (f" (в группе «{item['group_name']}»)" if item["group_name"] else ""))
+            checks.append((check, item["ids"]))
+            box.append(check)
+        if not checks:
+            box.append(make_label("Все устройства уже в этой группе", "muted"))
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_child(box)
+        dialog.get_content_area().append(scroll)
+        group_id = self.selected_group_id
+
+        def response(dlg, result):
+            ids = [i for check, device_ids in checks if check.get_active() for i in device_ids]
+            dlg.close()
+            if result == Gtk.ResponseType.ACCEPT and ids:
+                self._set_group_for(ids, group_id)
+
+        dialog.connect("response", response)
+        dialog.present()
 
     def _archive_page(self):
         page = self._page("ВОСПРОИЗВЕДЕНИЕ", "Архив", "Удалённый поиск и воспроизведение записей")
@@ -927,10 +1365,8 @@ class SentinelWindow(Gtk.ApplicationWindow):
         now = datetime.now().replace(second=0, microsecond=0)
         self.access_start = Gtk.Entry(text=(now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S"))
         self.access_end = Gtk.Entry(text=now.strftime("%Y-%m-%d %H:%M:%S"))
-        self.access_event_type = Gtk.DropDown.new_from_strings(["Все события", "Доступ разрешён", "Доступ запрещён"])
         self._field(filters, "Начало", self.access_start, 0)
         self._field(filters, "Конец", self.access_end, 1)
-        self._field(filters, "Тип", self.access_event_type, 2)
         search.append(filters)
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin_start=16, margin_bottom=10)
         actions.append(self._button("Поиск событий", self.access_search_events))
@@ -1083,6 +1519,9 @@ class SentinelWindow(Gtk.ApplicationWindow):
             raise ValueError("Контроль доступа по ISAPI доступен для устройств Hikvision")
         username = self.access_user.get_text().strip()
         if not username:
+            known = self.session_credentials.get(device["id"])
+            if known and known.get("username"):
+                return device, {"username": known["username"], "password": known.get("password", "")}
             raise ValueError("Введите пользователя контроллера")
         return device, {"username": username, "password": self.access_password.get_text()}
 
@@ -1212,64 +1651,12 @@ class SentinelWindow(Gtk.ApplicationWindow):
         if hasattr(self, "access_device"):
             self.access_device.set_model(Gtk.StringList.new(strings))
 
-    def refresh(self):
+    def refresh(self, *_args):
         self.devices = load_devices()
+        self.groups = load_groups()
         self._fill_resource_list()
-        self._clear_box(self.devices_list)
-        self.device_selection_checks = {}
-        self.device_group_checks = []
-        self.select_all_devices.set_active(False)
-        if not self.devices:
-            self.devices_list.append(make_label("Устройств пока нет. Добавьте первое устройство.", "muted"))
-        groups = {}
-        for device in self.devices:
-            key = (device["protocol"], device["host"], device["sdk_port"],
-                   device["http_port"], device["rtsp_port"])
-            groups.setdefault(key, []).append(device)
-
-        for (protocol, host, sdk_port, http_port, rtsp_port), devices in groups.items():
-            group = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-            group.add_css_class("section-card")
-            group.set_margin_top(4)
-            heading = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            group_select = Gtk.CheckButton(label=f"{host} · {len(devices)} каналов")
-            group_select.set_hexpand(True)
-            group_select.set_halign(Gtk.Align.START)
-            group_ids = [d["id"] for d in devices]
-            group_select.connect("toggled", self._toggle_device_group, group_ids)
-            self.device_group_checks.append((group_select, group_ids))
-            heading.append(group_select)
-            delete_group = Gtk.Button(label="Удалить регистратор" if protocol == "hikvision" else "Удалить группу")
-            delete_group.add_css_class("destructive-action")
-            delete_group.connect("clicked", self._confirm_delete_devices, [d["id"] for d in devices],
-                                 f"регистратор {host} и все его каналы")
-            heading.append(delete_group)
-            group.append(heading)
-            group.append(make_label(
-                f"{'Hikvision' if protocol == 'hikvision' else 'RTSP'} · SDK {sdk_port} · HTTP {http_port} · RTSP {rtsp_port}",
-                "muted"))
-            for device in devices:
-                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-                row.set_margin_start(10)
-                row.set_margin_top(3)
-                row.set_margin_bottom(3)
-                check = Gtk.CheckButton()
-                check.set_valign(Gtk.Align.CENTER)
-                check.connect("toggled", self._device_selection_changed)
-                self.device_selection_checks[device["id"]] = check
-                row.append(check)
-                details = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-                details.set_hexpand(True)
-                details.append(make_label(device["name"]))
-                details.append(make_label(f"CH {device['channel']}", "muted"))
-                row.append(details)
-                row.append(make_label("● не проверено", "muted"))
-                delete = Gtk.Button(label="Удалить")
-                delete.connect("clicked", self._confirm_delete_devices, [device["id"]],
-                               f"канал {device['name']}")
-                row.append(delete)
-                group.append(row)
-            self.devices_list.append(group)
+        self._render_device_rows()
+        self._render_groups()
         self._refresh_archive_choices()
         self._fill_custom_view_list()
         self._update_dashboard(update_maps=True)
@@ -1278,49 +1665,29 @@ class SentinelWindow(Gtk.ApplicationWindow):
     def _toggle_all_device_selection(self, check):
         if self._selection_update_guard:
             return
-        selected = check.get_active()
         self._selection_update_guard = True
         try:
-            for item in self.device_selection_checks.values():
-                item.set_active(selected)
+            for item, _ids in self.device_row_checks:
+                item.set_active(check.get_active())
         finally:
             self._selection_update_guard = False
-        self._device_selection_changed()
-
-    def _toggle_device_group(self, check, device_ids):
-        selected = check.get_active()
-        self._selection_update_guard = True
-        try:
-            for device_id in device_ids:
-                item = self.device_selection_checks.get(device_id)
-                if item:
-                    item.set_active(selected)
-        finally:
-            self._selection_update_guard = False
-        self._device_selection_changed()
 
     def _device_selection_changed(self, *_args):
-        if not hasattr(self, "select_all_devices") or self._selection_update_guard:
+        if self._selection_update_guard:
             return
-        all_selected = bool(self.device_selection_checks) and all(
-            check.get_active() for check in self.device_selection_checks.values())
+        all_selected = bool(self.device_row_checks) and all(c.get_active() for c, _ in self.device_row_checks)
         self._selection_update_guard = True
         try:
             self.select_all_devices.set_active(all_selected)
-            for group_check, device_ids in self.device_group_checks:
-                group_check.set_active(bool(device_ids) and all(
-                    self.device_selection_checks[device_id].get_active()
-                    for device_id in device_ids if device_id in self.device_selection_checks))
         finally:
             self._selection_update_guard = False
 
     def _confirm_delete_selected_devices(self, *_args):
-        device_ids = [device_id for device_id, check in self.device_selection_checks.items()
-                      if check.get_active()]
+        device_ids = [i for check, ids in self.device_row_checks if check.get_active() for i in ids]
         if not device_ids:
-            self.notify("Сначала отметьте каналы для удаления")
+            self.notify("Сначала отметьте устройства для удаления")
             return
-        self._confirm_delete_devices(None, device_ids, f"{len(device_ids)} выбранных каналов")
+        self._confirm_delete_devices(None, device_ids, f"выбранные устройства (каналов: {len(device_ids)})")
 
     def _confirm_delete_devices(self, _button, device_ids, description):
         dialog = Gtk.MessageDialog(
@@ -1438,9 +1805,9 @@ class SentinelWindow(Gtk.ApplicationWindow):
                 try:
                     with database() as db:
                         db.execute("""INSERT INTO saved_views
-                            (name,layout,mapping,grid_columns,grid_rows) VALUES(?,?,?,?,?)""",
+                            (name,layout,mapping,grid_columns,grid_rows,division) VALUES(?,?,?,?,?,?)""",
                                    (name, self.layout_count, json.dumps(mapping),
-                                    self.grid_columns, self.grid_rows))
+                                    self.grid_columns, self.grid_rows, getattr(self, "division", "")))
                 except sqlite3.IntegrityError:
                     self.notify("Вид с таким названием уже существует")
                     return
@@ -1457,12 +1824,22 @@ class SentinelWindow(Gtk.ApplicationWindow):
     def load_custom_view(self, view):
         if self.streams:
             self.stop_all_streams()
-        self.layout_count = int(view["layout"])
-        columns = int(view.get("grid_columns") or 0)
-        rows = int(view.get("grid_rows") or 0)
-        if columns < 1 or rows < 1 or columns * rows != self.layout_count:
-            columns, rows = self._default_grid_shape(self.layout_count)
-        self.grid_columns, self.grid_rows = columns, rows
+        division = self._lookup_division(view.get("division") or "")
+        if division and division.count == int(view["layout"]):
+            self._restore_maximized_slot()
+            self.division = division.key
+            self.layout_count = division.count
+            self.grid_columns, self.grid_rows = division.cols, division.rows
+            self.cell_layout = list(division.cells)
+        else:
+            self.layout_count = int(view["layout"])
+            columns = int(view.get("grid_columns") or 0)
+            rows = int(view.get("grid_rows") or 0)
+            if columns < 1 or rows < 1 or columns * rows != self.layout_count:
+                columns, rows = self._default_grid_shape(self.layout_count)
+            self.grid_columns, self.grid_rows = columns, rows
+            self.division = ""
+            self.cell_layout = None
         self._render_video_grid()
         mapping = json.loads(view["mapping"])
         self._load_view_cameras(mapping, 0)
@@ -1503,26 +1880,98 @@ class SentinelWindow(Gtk.ApplicationWindow):
         if not matches:
             self.resource_list.append(make_label("Нет камер. Добавьте устройство через раздел «Устройства».", "muted"))
             return
-        for device in matches:
-            row = Gtk.Button()
-            row.set_has_frame(False)
-            row.set_halign(Gtk.Align.FILL)
-            label = Gtk.Label(label=f"📹  {device['name']}\n      {device['host']} · CH {device['channel']}")
-            label.set_xalign(0)
-            row.set_child(label)
-            row.connect("clicked", lambda _btn, d=device: self.open_live_dialog(d))
-            source = Gtk.DragSource()
-            source.set_actions(Gdk.DragAction.COPY)
-            source.connect("prepare", lambda _source, _x, _y, did=device["id"]:
-                           Gdk.ContentProvider.new_for_value(f"camera:{did}"))
-            row.add_controller(source)
-            context = Gtk.GestureClick()
-            context.set_button(3)
-            context.connect("released", lambda _gesture, _count, x, y, d=device, widget=row:
-                            self._show_camera_menu(d, widget, x, y))
-            row.add_controller(context)
-            row.set_tooltip_text("Перетащите камеру в окно просмотра или нажмите правой кнопкой для действий")
-            self.resource_list.append(row)
+        groups = getattr(self, "groups", [])
+        rows = devmgmt.physical_devices(matches, groups)
+        by_id = {d["id"]: d for d in matches}
+        for group, members in devmgmt.group_tree(groups, rows):
+            if not members:
+                continue
+            group_name = group["name"] if group else "Без группы"
+            group_expander = Gtk.Expander(label=f"{group_name}  ({sum(m['channels'] for m in members)})")
+            group_expander.set_expanded(bool(query) or group is None or len(groups) <= 3)
+            group_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+            group_box.set_margin_start(10)
+            for member in members:
+                device_expander = Gtk.Expander(label=f"{member['name']}  ({member['channels']})")
+                device_expander.set_expanded(bool(query) or len(members) == 1)
+                camera_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+                camera_box.set_margin_start(10)
+                for device_id in member["ids"]:
+                    camera_box.append(self._camera_row(by_id[device_id]))
+                device_expander.set_child(camera_box)
+                group_box.append(device_expander)
+            group_expander.set_child(group_box)
+            self.resource_list.append(group_expander)
+
+    def _camera_row(self, device):
+        row = Gtk.Button()
+        row.set_has_frame(False)
+        row.set_halign(Gtk.Align.FILL)
+        label = Gtk.Label(label=f"📹  {device['name']}\n      CH {device['channel']}")
+        label.set_xalign(0)
+        row.set_child(label)
+        row.connect("clicked", lambda _btn, d=device: self.open_live_dialog(d))
+        source = Gtk.DragSource()
+        source.set_actions(Gdk.DragAction.COPY)
+        source.connect("prepare", lambda _source, _x, _y, did=device["id"]:
+                       Gdk.ContentProvider.new_for_value(f"camera:{did}"))
+        row.add_controller(source)
+        context = Gtk.GestureClick()
+        context.set_button(3)
+        context.connect("released", lambda _gesture, _count, x, y, d=device, widget=row:
+                        self._show_camera_menu(d, widget, x, y))
+        row.add_controller(context)
+        row.set_tooltip_text("Двойной клик или перетаскивание в окно просмотра; правая кнопка — действия")
+        return row
+
+    @staticmethod
+    def _lookup_division(key):
+        division = layouts.DIVISIONS.get(key)
+        if division:
+            return division
+        if isinstance(key, str) and key.startswith("c:"):
+            for item in load_custom_divisions():
+                if item["name"] == key[2:]:
+                    return layouts.Division(key, item["name"], item["cols"], item["rows"], tuple(item["cells"]))
+        return None
+
+    def _current_cells(self):
+        cells = getattr(self, "cell_layout", None)
+        if cells and len(cells) == self.layout_count:
+            return cells
+        columns = max(1, self.grid_columns)
+        return [(i % columns, i // columns, 1, 1) for i in range(self.layout_count)]
+
+    def _set_division(self, key):
+        division = self._lookup_division(key)
+        if division is None:
+            return False
+        if key == getattr(self, "division", "") and division.count == self.layout_count:
+            return True
+        for slot in list(self.streams):
+            if slot >= division.count:
+                self._stop_stream(slot)
+        self._restore_maximized_slot()
+        self.division = key
+        self.layout_count = division.count
+        self.grid_columns, self.grid_rows = division.cols, division.rows
+        self.cell_layout = list(division.cells)
+        self._render_video_grid()
+        self._refresh_thumbnail_streams()
+        return True
+
+    def _desired_stream(self, index):
+        mode = getattr(self, "stream_mode", layouts.STREAM_AUTO)
+        available = (1, 2) if mode == layouts.STREAM_AUTO else (1, 2, 3)
+        number = layouts.resolve_stream(mode, self.layout_count,
+                                        index == getattr(self, "maximized_slot", None), available)
+        return {1: "main", 2: "sub", 3: "third"}[number]
+
+    def _set_stream_mode(self, mode):
+        if mode not in layouts.STREAM_MODES:
+            return
+        self.stream_mode = mode
+        self._refresh_thumbnail_streams()
 
     @staticmethod
     def _default_grid_shape(count):
@@ -1543,6 +1992,8 @@ class SentinelWindow(Gtk.ApplicationWindow):
         self._restore_maximized_slot()
         self.layout_count = count
         self.grid_columns, self.grid_rows = columns, rows
+        self.division = ""
+        self.cell_layout = None
         self._render_video_grid()
         self._refresh_thumbnail_streams()
 
@@ -1584,14 +2035,22 @@ class SentinelWindow(Gtk.ApplicationWindow):
         recordings = Gtk.Entry(text=str(self.record_folder))
         self._field(form, "Папка снимков", captures, 0)
         self._field(form, "Папка видеозаписей", recordings, 1)
+        insecure_basic = Gtk.CheckButton(
+            label="Разрешить HTTP Basic по http:// (пароль уходит открытым текстом; нужен только "
+                  "камерам без Digest)")
+        insecure_basic.set_active(self.allow_insecure_basic)
+        form.attach(insecure_basic, 0, 2, 2, 1)
         dialog.get_content_area().append(form)
         def response(dlg, result):
             if result == Gtk.ResponseType.ACCEPT:
                 self.capture_folder = Path(captures.get_text()).expanduser()
                 self.record_folder = Path(recordings.get_text()).expanduser()
+                self.allow_insecure_basic = insecure_basic.get_active()
+                set_allow_insecure_basic(self.allow_insecure_basic)
                 with database() as db:
                     db.executemany("INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                                   (("capture_folder", str(self.capture_folder)), ("record_folder", str(self.record_folder))))
+                                   (("capture_folder", str(self.capture_folder)), ("record_folder", str(self.record_folder)),
+                                    ("allow_insecure_basic", "1" if self.allow_insecure_basic else "0")))
                 self.notify("Параметры сохранены")
             dlg.close()
         dialog.connect("response", response)
@@ -1610,7 +2069,8 @@ class SentinelWindow(Gtk.ApplicationWindow):
         }
         self._clear_box(self.camera_grid)
         self.video_slots = []
-        columns = self.grid_columns
+        cells = self._current_cells()
+        self.camera_grid.set_row_homogeneous(any(c[2] > 1 or c[3] > 1 for c in cells))
         for index in range(self.layout_count):
             paintable = paintables.get(index)
             aspect_ratio = (
@@ -1670,7 +2130,8 @@ class SentinelWindow(Gtk.ApplicationWindow):
                 self._digital_zoom_region(i, x, y, dx, dy, p.get_width(), p.get_height()))
             pane.add_controller(zoom_drag)
             aspect_frame.set_child(pane)
-            self.camera_grid.attach(aspect_frame, index % columns, index // columns, 1, 1)
+            col, row, colspan, rowspan = cells[index]
+            self.camera_grid.attach(aspect_frame, col, row, colspan, rowspan)
             self.video_slots.append({"pane": pane, "aspect_frame": aspect_frame,
                                      "aspect_ratio": aspect_ratio, "picture": picture, "placeholder": placeholder,
                                      "caption": caption, "device": None})
@@ -1713,10 +2174,11 @@ class SentinelWindow(Gtk.ApplicationWindow):
         self.maximized_slot = index
         self._fit_maximized_slot()
         state = self.streams[index]
-        if (self.layout_count >= 9 and state["device"]["protocol"] == "hikvision"
-                and not state["playback"]):
-            self._start_preview(index, state["base_device"], state["credentials"],
-                                stream_override="main")
+        if state["device"]["protocol"] == "hikvision" and not state["playback"]:
+            desired = self._desired_stream(index)
+            if desired != state["device"]["stream"]:
+                self._start_preview(index, state["base_device"], state["credentials"],
+                                    stream_override=desired)
 
     def _restore_maximized_slot(self, restart_stream=False):
         index = getattr(self, "maximized_slot", None)
@@ -1730,14 +2192,17 @@ class SentinelWindow(Gtk.ApplicationWindow):
         slot["aspect_frame"].set_halign(Gtk.Align.FILL)
         slot["aspect_frame"].set_valign(Gtk.Align.FILL)
         slot["pane"].set_vexpand(True)
-        self.camera_grid.attach(slot["aspect_frame"], index % self.grid_columns, index // self.grid_columns, 1, 1)
+        col, row, colspan, rowspan = self._current_cells()[index]
+        self.camera_grid.attach(slot["aspect_frame"], col, row, colspan, rowspan)
         self.camera_scroll.set_visible(True)
         self.maximized_slot = None
         state = self.streams.get(index)
-        if (restart_stream and state and self.layout_count >= 9
-                and state["device"]["protocol"] == "hikvision" and not state["playback"]):
-            self._start_preview(index, state["base_device"], state["credentials"],
-                                stream_override="sub")
+        if (restart_stream and state and state["device"]["protocol"] == "hikvision"
+                and not state["playback"]):
+            desired = self._desired_stream(index)
+            if desired != state["device"]["stream"]:
+                self._start_preview(index, state["base_device"], state["credentials"],
+                                    stream_override=desired)
 
     def _fit_maximized_slot(self, *_args):
         index = getattr(self, "maximized_slot", None)
@@ -1758,8 +2223,7 @@ class SentinelWindow(Gtk.ApplicationWindow):
         for index, state in list(self.streams.items()):
             if state["device"]["protocol"] != "hikvision" or state["playback"]:
                 continue
-            desired_stream = ("sub" if self.layout_count >= 9 and index != self.maximized_slot
-                              else state["configured_stream"])
+            desired_stream = self._desired_stream(index)
             if state["device"]["stream"] != desired_stream:
                 self._start_preview(index, state["base_device"], state["credentials"],
                                     stream_override=desired_stream)
@@ -1790,6 +2254,7 @@ class SentinelWindow(Gtk.ApplicationWindow):
                    ("Сбросить цифровой зум", lambda: self._reset_digital_zoom(index)),
                    ("Поток · основной", lambda: self.set_selected_stream("main")),
                    ("Поток · дополнительный", lambda: self.set_selected_stream("sub")),
+                   ("Поток · третий", lambda: self.set_selected_stream("third")),
                    ("Сведения о камере", self.show_selected_stream_info),
                    ("Остановить камеру", lambda: self._stop_stream(index)))
         for title, callback in options:
@@ -1806,20 +2271,106 @@ class SentinelWindow(Gtk.ApplicationWindow):
         popover.set_parent(widget)
         popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
         actions = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        mode = getattr(self, "stream_mode", layouts.STREAM_AUTO)
+
+        def mark(title, value):
+            return ("✓ " if mode == value else "    ") + title
+
         options = (
-            ("Открыть поток", lambda: self.open_live_dialog(device)),
+            ("Живой просмотр", lambda: self.open_live_dialog(device)),
             ("Открыть в выбранном окне", lambda: self.open_live_dialog(device, self.selected_slot)),
+            ("Изменить название камеры", lambda: self.rename_camera_dialog(device)),
+            ("Состояние камеры", lambda: self.show_camera_status(device)),
+            ("Удалённая настройка (веб-интерфейс)", lambda: self.open_remote_configuration(device)),
+            ("Синхронизировать время", lambda: self.sync_device_time(device)),
             ("Найти записи камеры", lambda: self._open_archive_for_device(device)),
+            (mark("Поток: основной", layouts.STREAM_MAIN), lambda: self._set_stream_mode(layouts.STREAM_MAIN)),
+            (mark("Поток: дополнительный", layouts.STREAM_SUB), lambda: self._set_stream_mode(layouts.STREAM_SUB)),
+            (mark("Поток: третий", layouts.STREAM_THIRD), lambda: self._set_stream_mode(layouts.STREAM_THIRD)),
+            (mark("Поток: автоматически", layouts.STREAM_AUTO), lambda: self._set_stream_mode(layouts.STREAM_AUTO)),
         )
         for title, callback in options:
             button = Gtk.Button(label=title)
             button.set_has_frame(False)
+            button.set_halign(Gtk.Align.START)
             button.connect("clicked", lambda _button, cb=callback, menu=popover:
                            (menu.popdown(), cb()))
             actions.append(button)
         popover.set_child(actions)
         popover.connect("closed", lambda menu: menu.unparent())
         popover.popup()
+
+    def rename_camera_dialog(self, device):
+        def rename(name):
+            with database() as db:
+                db.execute("UPDATE devices SET name=? WHERE id=?", (name[:120], device["id"]))
+            self.refresh()
+        self._ask_text("Название камеры", device["name"], rename)
+
+    def show_camera_status(self, device):
+        def check(camera, credentials):
+            threading.Thread(target=self._camera_status_worker, args=(camera, credentials), daemon=True).start()
+        if device["protocol"] != "hikvision":
+            self.notify(f"{device['name']}\nПроверка состояния доступна только для Hikvision.")
+            return
+        self._credentials_dialog("Состояние · " + device["name"], device, check)
+
+    def _camera_status_worker(self, device, credentials):
+        started = time.monotonic()
+        try:
+            info = parse_device_info(self._isapi_request(device, credentials, "/ISAPI/System/deviceInfo"))
+            elapsed = int((time.monotonic() - started) * 1000)
+            lines = [f"{device['name']}: в сети ({elapsed} мс)"]
+            for key, title in (("deviceName", "Имя"), ("model", "Модель"), ("serialNumber", "Серийный номер")):
+                if info.get(key):
+                    lines.append(f"{title}: {info[key]}")
+            message = "\n".join(lines)
+        except urllib.error.HTTPError as exc:
+            message = f"{device['name']}: устройство ответило HTTP {exc.code}"
+        except (urllib.error.URLError, OSError, ET.ParseError) as exc:
+            message = f"{device['name']}: недоступно ({getattr(exc, 'reason', exc)})"
+        GLib.idle_add(self.notify, message)
+
+    def open_remote_configuration(self, device):
+        scheme = "https" if int(device.get("http_port", 80)) == 443 else "http"
+        uri = f"{scheme}://{device['host']}:{device.get('http_port', 80)}/"
+        try:
+            Gtk.show_uri(self, uri, Gdk.CURRENT_TIME)
+        except Exception as exc:
+            self.notify(f"Не удалось открыть {uri}: {exc}")
+
+    def sync_device_time(self, device):
+        if device["protocol"] != "hikvision":
+            self.notify("Синхронизация времени доступна только для Hikvision")
+            return
+        dialog = Gtk.MessageDialog(
+            transient_for=self, modal=True, message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.CANCEL,
+            text=f"Установить на устройстве «{device['host']}» время этого компьютера?")
+        dialog.add_button("Синхронизировать", Gtk.ResponseType.ACCEPT)
+
+        def response(dlg, result):
+            dlg.close()
+            if result != Gtk.ResponseType.ACCEPT:
+                return
+
+            def go(camera, credentials):
+                threading.Thread(target=self._sync_time_worker, args=(camera, credentials), daemon=True).start()
+            self._credentials_dialog("Синхронизация времени · " + device["name"], device, go)
+
+        dialog.connect("response", response)
+        dialog.present()
+
+    def _sync_time_worker(self, device, credentials):
+        try:
+            self._isapi_request(device, credentials, "/ISAPI/System/time", method="PUT",
+                                body=build_time_xml(datetime.now(timezone.utc)))
+            message = f"Время на {device['host']} синхронизировано"
+        except urllib.error.HTTPError as exc:
+            message = f"Устройство отклонило синхронизацию времени (HTTP {exc.code})"
+        except (urllib.error.URLError, OSError) as exc:
+            message = f"Не удалось связаться с устройством: {getattr(exc, 'reason', exc)}"
+        GLib.idle_add(self.notify, message)
 
     def _open_archive_for_device(self, device):
         if not device:
@@ -1980,6 +2531,29 @@ class SentinelWindow(Gtk.ApplicationWindow):
             grid.attach(widget, 1, row, 1, 1)
             fields[key] = widget
 
+        extra_row = len(fields)
+        grid.attach(make_label("Режим добавления", "muted"), 0, extra_row, 1, 1)
+        fields["mode"] = Gtk.DropDown.new_from_strings(["Один адрес", "Диапазон IP"])
+        fields["mode"].set_hexpand(True)
+        grid.attach(fields["mode"], 1, extra_row, 1, 1)
+        end_label = make_label("Конечный IP диапазона", "muted")
+        fields["end_host"] = Gtk.Entry(placeholder_text="192.168.1.80")
+        fields["end_host"].set_hexpand(True)
+        grid.attach(end_label, 0, extra_row + 1, 1, 1)
+        grid.attach(fields["end_host"], 1, extra_row + 1, 1, 1)
+        grid.attach(make_label("Группа", "muted"), 0, extra_row + 2, 1, 1)
+        fields["group"] = Gtk.Entry(placeholder_text="Необязательно; будет создана, если её нет")
+        fields["group"].set_hexpand(True)
+        grid.attach(fields["group"], 1, extra_row + 2, 1, 1)
+
+        def update_mode(*_args):
+            is_range = fields["mode"].get_selected() == 1
+            end_label.set_visible(is_range)
+            fields["end_host"].set_visible(is_range)
+
+        fields["mode"].connect("notify::selected", update_mode)
+        update_mode()
+
         manual_channels = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         manual_channels.append(make_label("Первый канал", "muted"))
         fields["channel"] = Gtk.SpinButton.new_with_range(1, 512, 1)
@@ -2028,8 +2602,20 @@ class SentinelWindow(Gtk.ApplicationWindow):
                 self.notify("Последний канал должен быть не выше 512")
                 return
 
+            hosts = [host]
+            if fields["mode"].get_selected() == 1:
+                try:
+                    hosts = devmgmt.expand_ip_segment(host, fields["end_host"].get_text())
+                except ValueError as exc:
+                    self.notify(str(exc))
+                    return
+                if protocol != "hikvision":
+                    self.notify("Диапазон IP поддерживается только для Hikvision")
+                    return
+            group_name = fields["group"].get_text().strip()
             device = {
                 "name": name,
+                "group_name": group_name,
                 "host": host,
                 "protocol": protocol,
                 "sdk_port": fields["sdk_port"].get_value_as_int(),
@@ -2044,6 +2630,14 @@ class SentinelWindow(Gtk.ApplicationWindow):
             channel_status.set_text(
                 "Подключение и определение каналов…"
                 if protocol == "hikvision" else "Добавление RTSP-устройства…")
+            if len(hosts) > 1:
+                channel_status.set_text(f"Проверка адресов: 0 из {len(hosts)}…")
+                threading.Thread(
+                    target=self._probe_range_for_add,
+                    args=(dlg, add_button, channel_status, device, credentials, hosts),
+                    daemon=True,
+                ).start()
+                return
             threading.Thread(
                 target=self._probe_device_for_add,
                 args=(dlg, add_button, channel_status, device, credentials),
@@ -2057,6 +2651,7 @@ class SentinelWindow(Gtk.ApplicationWindow):
         try:
             if device["protocol"] == "hikvision":
                 channels = self._discover_hikvision_channels(device, credentials)
+                device.update(self._probe_device_extras(device, credentials))
             else:
                 first = device["first_channel"]
                 channels = list(range(first, first + device["manual_channel_count"]))
@@ -2064,6 +2659,62 @@ class SentinelWindow(Gtk.ApplicationWindow):
                           device, credentials, channels)
         except Exception as exc:
             GLib.idle_add(self._device_probe_failed, add_button, status, str(exc))
+
+    def _probe_device_extras(self, device, credentials):
+        """Имя, модель, серийный номер и названия каналов с устройства; ошибки не критичны."""
+        extras = {"channel_names": {}}
+        try:
+            info = parse_device_info(self._isapi_request(device, credentials, "/ISAPI/System/deviceInfo"))
+            extras["device_name"] = info.get("deviceName", "")
+            extras["device_model"] = info.get("model", "")
+            extras["serial_no"] = info.get("serialNumber", "")
+        except Exception:
+            pass
+        for path, tag in (("/ISAPI/ContentMgmt/InputProxy/channels", "InputProxyChannel"),
+                          ("/ISAPI/System/Video/inputs/channels", "VideoInputChannel")):
+            try:
+                names = parse_channel_names(self._isapi_request(device, credentials, path), tag)
+            except Exception:
+                continue
+            if names:
+                extras["channel_names"] = names
+                break
+        return extras
+
+    def _probe_range_for_add(self, dialog, add_button, status, template, credentials, hosts):
+        from concurrent.futures import ThreadPoolExecutor
+
+        results = {"added": 0, "failed": 0, "done": 0}
+        lock = threading.Lock()
+
+        def one(host):
+            device = dict(template, host=host, name=f"{template['name']} {host}")
+            try:
+                channels = self._discover_hikvision_channels(device, credentials)
+                device.update(self._probe_device_extras(device, credentials))
+                self._store_probed_device(device, credentials, channels)
+                outcome = "added"
+            except Exception:
+                outcome = "failed"
+            with lock:
+                results[outcome] += 1
+                results["done"] += 1
+                done = results["done"]
+            GLib.idle_add(status.set_text, f"Проверка адресов: {done} из {len(hosts)}…")
+
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            list(pool.map(one, hosts))
+        GLib.idle_add(self._range_probe_finished, dialog, add_button, status, results)
+
+    def _range_probe_finished(self, dialog, add_button, status, results):
+        self.refresh()
+        if results["added"]:
+            dialog.close()
+            self.notify(f"Добавлено устройств: {results['added']}. Не отвечают или отклонили вход: {results['failed']}")
+        else:
+            self._device_probe_failed(
+                add_button, status, "Ни одно устройство в диапазоне не подключилось. Проверьте адреса и учётные данные.")
+        return GLib.SOURCE_REMOVE
 
     def _discover_hikvision_channels(self, device, credentials):
         endpoints: tuple[tuple[str, Callable[[bytes], list[int]]], ...] = (
@@ -2122,30 +2773,43 @@ class SentinelWindow(Gtk.ApplicationWindow):
             "HTTP-порт доступен, но каналы не удалось определить: устройство не поддержало найденные "
             f"ISAPI-пути или вернуло пустой список. {details}")
 
-    def _save_probed_device(self, dialog, add_button, status, device, credentials, channels):
+    def _store_probed_device(self, device, credentials, channels):
+        """Записать устройство и его каналы; безопасно вызывать из рабочего потока."""
         if not channels or len(channels) > 512:
-            return self._device_probe_failed(add_button, status, "Устройство вернуло недопустимое число каналов")
-        try:
-            device_ids = []
-            with database() as db:
-                for channel in channels:
-                    channel_name = device["name"] if len(channels) == 1 else f"{device['name']} CH {channel}"
-                    cursor = db.execute(
-                        """INSERT INTO devices
-                        (name,host,sdk_port,http_port,rtsp_port,channel,stream,protocol)
-                        VALUES(?,?,?,?,?,?,?,?)""",
-                        (channel_name, device["host"], device["sdk_port"], device["http_port"],
-                         device["rtsp_port"], channel, device["stream"], device["protocol"]))
-                    device_ids.append(cursor.lastrowid)
-        except sqlite3.IntegrityError:
-            return self._device_probe_failed(add_button, status, "Один или несколько каналов уже добавлены")
+            raise ValueError("Устройство вернуло недопустимое число каналов")
+        group_id = add_group(device["group_name"]) if device.get("group_name") else None
+        names = device.get("channel_names") or {}
+        base = device["name"]
+        device_ids = []
+        with database() as db:
+            for channel in channels:
+                title = devmgmt.channel_title(base, channel, names, single=len(channels) == 1)
+                cursor = db.execute(
+                    """INSERT INTO devices
+                    (name,host,sdk_port,http_port,rtsp_port,channel,stream,protocol,
+                     group_id,serial_no,device_model,host_name)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (title, device["host"], device["sdk_port"], device["http_port"],
+                     device["rtsp_port"], channel, device["stream"], device["protocol"],
+                     group_id, device.get("serial_no", ""), device.get("device_model", ""),
+                     device.get("device_name") or base))
+                device_ids.append(cursor.lastrowid)
         if device["protocol"] == "hikvision":
             for device_id in device_ids:
                 self.session_credentials[device_id] = dict(credentials)
             try:
                 save_credentials(device, credentials)
             except (CredentialStoreError, sqlite3.Error) as exc:
-                self.notify(f"Устройство добавлено, но пароль не сохранён: {exc}")
+                GLib.idle_add(self.notify, f"Устройство добавлено, но пароль не сохранён: {exc}")
+        return device_ids
+
+    def _save_probed_device(self, dialog, add_button, status, device, credentials, channels):
+        try:
+            self._store_probed_device(device, credentials, channels)
+        except ValueError as exc:
+            return self._device_probe_failed(add_button, status, str(exc))
+        except sqlite3.IntegrityError:
+            return self._device_probe_failed(add_button, status, "Один или несколько каналов уже добавлены")
         self.refresh()
         dialog.close()
         self.notify(f"Подключено. Найдено каналов: {len(channels)}")
@@ -2332,7 +2996,7 @@ class SentinelWindow(Gtk.ApplicationWindow):
             raise ValueError("Введите имя пользователя устройства")
         auth = user + ":" + password + "@"
         if device["protocol"] == "hikvision":
-            stream_num = int(device["channel"]) * 100 + (2 if device["stream"] == "sub" else 1)
+            stream_num = int(device["channel"]) * 100 + layouts.STREAM_SUFFIX.get(device["stream"], 1)
             if playback:
                 start = self._utc_timestamp(playback[0])
                 end = self._utc_timestamp(playback[1])
@@ -2521,13 +3185,7 @@ class SentinelWindow(Gtk.ApplicationWindow):
 
     def toggle_alarm_monitor(self):
         if self.alarm_thread and self.alarm_thread.is_alive():
-            self.alarm_stop.set()
-            if self.alarm_response:
-                try:
-                    self.alarm_response.close()
-                except Exception:
-                    pass
-            self.alarm_thread = None
+            self._stop_alarm_monitor()
             self.alarm_status.set_text("Отключено")
             self.alarm_toggle.set_label("▶ Подключить тревоги")
             return
@@ -2542,29 +3200,76 @@ class SentinelWindow(Gtk.ApplicationWindow):
         username = self.alarm_user.get_text().strip()
         password = self.alarm_password.get_text()
         if not username:
+            known = self.session_credentials.get(device["id"])
+            if known and known.get("username"):
+                username, password = known["username"], known.get("password", "")
+        if not username:
             self.notify("Введите имя пользователя устройства")
             return
         self.session_credentials[device["id"]] = {"username": username, "password": password}
-        self.alarm_stop.clear()
+        # A fresh event per run: a worker that is still winding down keeps its own (set) event
+        # and can never be revived by, or write into, the next connection.
+        stop = threading.Event()
+        self.alarm_stop = stop
         self.alarm_status.set_text(f"Подключение: {device['name']}…")
         self.alarm_toggle.set_label("■ Отключить тревоги")
-        self.alarm_thread = threading.Thread(target=self._alarm_worker, args=(device, username, password), daemon=True)
+        self.alarm_thread = threading.Thread(target=self._alarm_worker,
+                                             args=(device, username, password, stop), daemon=True)
         self.alarm_thread.start()
 
-    def _alarm_worker(self, device, username, password):
+    def _stop_alarm_monitor(self):
+        self.alarm_stop.set()
+        response = self.alarm_response
+        if response:
+            try:
+                response.close()
+            except Exception:
+                pass
+        self.alarm_thread = None
+
+    def _alarm_worker(self, device, username, password, stop):
         url = f"http://{device['host']}:{device.get('http_port', 80)}/ISAPI/Event/notification/alertStream"
-        opener = authenticated_opener(url, username, password)
-        try:
-            response = opener.open(urllib.request.Request(url, headers={"Accept": "multipart/mixed"}), timeout=8)
-            self.alarm_response = response
-            GLib.idle_add(self.alarm_status.set_text, f"Подключено: {device['name']}")
-            for payload in iter_alert_payloads(response, self.alarm_stop):
-                self._parse_alarm(payload, device)
-        except Exception as exc:
-            if not self.alarm_stop.is_set():
-                GLib.idle_add(self._alarm_error, str(exc))
-        finally:
-            self.alarm_response = None
+        delay = ALARM_RECONNECT_MIN
+        while not stop.is_set():
+            response = None
+            reason = "поток тревог завершён устройством"
+            try:
+                opener = authenticated_opener(url, username, password)
+                response = opener.open(urllib.request.Request(url, headers={"Accept": "multipart/mixed"}),
+                                       timeout=ALARM_READ_TIMEOUT)
+                self.alarm_response = response
+                GLib.idle_add(self._set_alarm_status, stop, f"Подключено: {device['name']}")
+                delay = ALARM_RECONNECT_MIN
+                for payload in iter_alert_payloads(response, stop):
+                    self._parse_alarm(payload, device)
+            except urllib.error.HTTPError as exc:
+                if exc.code in (401, 403) and not stop.is_set():
+                    # Wrong password / no rights: retrying would only lock the account out.
+                    GLib.idle_add(self._alarm_error, f"HTTP {exc.code}: доступ отклонён устройством", stop)
+                    return
+                reason = f"HTTP {exc.code}"
+            except Exception as exc:
+                reason = str(exc) or exc.__class__.__name__
+            finally:
+                if response is not None:
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
+                if self.alarm_response is response:
+                    self.alarm_response = None
+            if stop.is_set():
+                return
+            GLib.idle_add(self._set_alarm_status, stop,
+                          f"Нет связи ({reason}). Повтор через {delay} с…")
+            if stop.wait(delay):
+                return
+            delay = min(delay * 2, ALARM_RECONNECT_MAX)
+
+    def _set_alarm_status(self, stop, text):
+        if self.alarm_stop is stop and not stop.is_set():
+            self.alarm_status.set_text(text)
+        return GLib.SOURCE_REMOVE
 
     def _parse_alarm(self, payload, device):
         try:
@@ -2602,7 +3307,7 @@ class SentinelWindow(Gtk.ApplicationWindow):
             self.notify("Архив тревоги доступен для Hikvision через ISAPI/RTSP")
             return
         try:
-            event_time = datetime.fromisoformat(event["time"])
+            event_time = parse_device_time(event["time"])
         except (KeyError, TypeError, ValueError) as exc:
             self.notify(f"Не удалось определить время события: {exc}")
             return
@@ -2625,7 +3330,9 @@ class SentinelWindow(Gtk.ApplicationWindow):
             return
         self._credentials_dialog("Видео события · " + device["name"], device, play)
 
-    def _alarm_error(self, message):
+    def _alarm_error(self, message, stop=None):
+        if stop is not None and self.alarm_stop is not stop:
+            return GLib.SOURCE_REMOVE
         self.alarm_status.set_text("Подключение прервано")
         self.alarm_toggle.set_label("▶ Подключить тревоги")
         self.notify(f"Не удалось подключить поток тревог: {message}")
@@ -2663,11 +3370,33 @@ class SentinelWindow(Gtk.ApplicationWindow):
         except (CredentialStoreError, sqlite3.Error) as exc:
             migrated = 0
             error = str(exc)
-        GLib.idle_add(self._finish_credential_migration, migrated, error)
+        found = self._prefetch_credentials() if error is None else {}
+        GLib.idle_add(self._finish_credential_migration, migrated, error, found)
 
-    def _finish_credential_migration(self, migrated, error):
+    @staticmethod
+    def _prefetch_credentials():
+        """Read saved passwords on a worker thread so later lookups hit the in-memory cache.
+
+        ``secret-tool`` can block for seconds (a locked keyring shows an unlock dialog), which
+        must never happen on the GTK main thread.
+        """
+        found, by_endpoint = {}, {}
+        try:
+            for device in load_devices():
+                key = (device["host"], int(device.get("http_port", 80)))
+                if key not in by_endpoint:
+                    by_endpoint[key] = load_saved_credentials(device)
+                if by_endpoint[key]:
+                    found[device["id"]] = dict(by_endpoint[key])
+        except (CredentialStoreError, OSError, RuntimeError, sqlite3.Error, subprocess.TimeoutExpired):
+            pass  # keyring unavailable: fall back to on-demand lookup / the credentials dialog
+        return found
+
+    def _finish_credential_migration(self, migrated, error, found=None):
         if self._closing:
             return GLib.SOURCE_REMOVE
+        for device_id, credentials in (found or {}).items():
+            self.session_credentials.setdefault(device_id, credentials)
         if error:
             self.notify(
                 "Не удалось перенести пароли в системное хранилище; старые записи SQLite "
@@ -3255,9 +3984,11 @@ class SentinelWindow(Gtk.ApplicationWindow):
         folder = Path.home() / "Videos" / "Sentinel"
         folder.mkdir(parents=True, exist_ok=True)
         filename = folder / datetime.now().strftime("export_%Y%m%d_%H%M%S.mkv")
-        subprocess.Popen([ffmpeg, "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp", "-i", uri,
-                          "-c", "copy", "-y", str(filename)], stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            FfmpegJob(ffmpeg, uri, str(filename), on_error=self._ffmpeg_failed)
+        except OSError as exc:
+            self.notify(f"Не удалось запустить FFmpeg: {exc}")
+            return
         self.notify("Экспорт записи начат")
 
     def _authenticate_device_uri(self, uri, device, credentials):
@@ -3288,9 +4019,8 @@ class SentinelWindow(Gtk.ApplicationWindow):
         preview_device = dict(device)
         if stream_override is not None:
             preview_device["stream"] = stream_override
-        elif (self.layout_count >= 9 and slot_index != self.maximized_slot
-              and device["protocol"] == "hikvision" and not playback and not direct_uri):
-            preview_device["stream"] = "sub"
+        elif device["protocol"] == "hikvision" and not playback and not direct_uri:
+            preview_device["stream"] = self._desired_stream(slot_index)
         uri = direct_uri or self._stream_url(preview_device, credentials, playback)
         sink = Gst.ElementFactory.make("appsink", f"sentinel-video-{slot_index}")
         pipeline = Gst.ElementFactory.make("playbin", f"sentinel-player-{slot_index}")
@@ -3339,20 +4069,28 @@ class SentinelWindow(Gtk.ApplicationWindow):
         now = time.monotonic()
         if now - state["last_frame_time"] < state["frame_interval"]:
             return Gst.FlowReturn.OK
+        if state.get("paint_pending"):
+            return Gst.FlowReturn.OK  # UI has not drawn the previous frame yet: drop this one
         state["last_frame_time"] = now
         structure = sample.get_caps().get_structure(0)
         width_ok, width = structure.get_int("width")
         height_ok, height = structure.get_int("height")
+        if not width_ok or not height_ok:
+            return Gst.FlowReturn.ERROR
         buffer = sample.get_buffer()
         success, mapped = buffer.map(Gst.MapFlags.READ)
-        if not success or not width_ok or not height_ok:
+        if not success:
             return Gst.FlowReturn.ERROR
-        rgba = bytes(mapped.data)
-        buffer.unmap(mapped)
+        try:
+            rgba = bytes(mapped.data)
+        finally:
+            buffer.unmap(mapped)
+        state["paint_pending"] = True
         GLib.idle_add(self._paint_sample, state, width, height, rgba)
         return Gst.FlowReturn.OK
 
     def _paint_sample(self, state, width, height, rgba):
+        state["paint_pending"] = False
         slot_index = state["slot"]
         if self.streams.get(slot_index) is not state or slot_index >= len(self.video_slots):
             return GLib.SOURCE_REMOVE
@@ -3401,8 +4139,8 @@ class SentinelWindow(Gtk.ApplicationWindow):
         if not state:
             return GLib.SOURCE_REMOVE
         if state.get("recording") and state["recording"].poll() is None:
-            state["recording"].send_signal(signal.SIGINT)
-        if hasattr(self, "record_button"):
+            state["recording"].stop()
+        if hasattr(self, "record_button") and slot == getattr(self, "selected_slot", slot):
             self._set_record_button_label("● Запись")
         state["pipeline"].set_state(Gst.State.NULL)
         state["pipeline"].get_bus().remove_signal_watch()
@@ -3457,7 +4195,7 @@ class SentinelWindow(Gtk.ApplicationWindow):
             return
         recording = state.get("recording")
         if recording and recording.poll() is None:
-            recording.send_signal(signal.SIGINT)
+            recording.stop()
             state["recording"] = None
             self._set_record_button_label("● Запись")
             self.notify("Запись остановлена")
@@ -3469,11 +4207,17 @@ class SentinelWindow(Gtk.ApplicationWindow):
         folder = getattr(self, "record_folder", getattr(getattr(self, "parent_window", None), "record_folder", Path.home() / "Videos" / "Sentinel"))
         folder.mkdir(parents=True, exist_ok=True)
         filename = folder / datetime.now().strftime("record_%Y%m%d_%H%M%S.mkv")
-        state["recording"] = subprocess.Popen([ffmpeg, "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp",
-            "-i", state["uri"], "-c", "copy", "-y", str(filename)], stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            state["recording"] = FfmpegJob(ffmpeg, state["uri"], str(filename), on_error=self._ffmpeg_failed)
+        except OSError as exc:
+            self.notify(f"Не удалось запустить FFmpeg: {exc}")
+            return
         self._set_record_button_label("■ Остановить запись")
         self.notify("Запись начата")
+
+    def _ffmpeg_failed(self, code, details):
+        message = f"FFmpeg завершился с ошибкой (код {code})" + (f": {details}" if details else "")
+        GLib.idle_add(self.notify, message)
 
     def instant_playback(self, seconds):
         state = self.streams.get(self.selected_slot)
@@ -3520,6 +4264,7 @@ class SentinelWindow(Gtk.ApplicationWindow):
         if hasattr(self, "stream_count_label"):
             self.stream_count_label.set_text(f"{count} потоков")
         self._update_dashboard()
+        self._update_status_bar()
         active = self.streams.get(getattr(self, "selected_slot", -1))
         if hasattr(self, "ptz_buttons"):
             enabled = bool(active and active["device"]["protocol"] == "hikvision")

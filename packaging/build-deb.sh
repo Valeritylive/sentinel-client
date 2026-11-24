@@ -22,6 +22,9 @@ mkdir -p \
 install -m 0644 "$SOURCE_DIR/app.py" "$PACKAGE_ROOT/usr/lib/sentinel/app.py"
 install -m 0644 "$SOURCE_DIR/sentinel_storage.py" "$PACKAGE_ROOT/usr/lib/sentinel/sentinel_storage.py"
 install -m 0644 "$SOURCE_DIR/sentinel_protocols.py" "$PACKAGE_ROOT/usr/lib/sentinel/sentinel_protocols.py"
+install -m 0644 "$SOURCE_DIR/sentinel_layouts.py" "$PACKAGE_ROOT/usr/lib/sentinel/sentinel_layouts.py"
+install -m 0644 "$SOURCE_DIR/sentinel_shell.py" "$PACKAGE_ROOT/usr/lib/sentinel/sentinel_shell.py"
+install -m 0644 "$SOURCE_DIR/sentinel_devmgmt.py" "$PACKAGE_ROOT/usr/lib/sentinel/sentinel_devmgmt.py"
 install -m 0644 "$SOURCE_DIR/VERSION" "$PACKAGE_ROOT/usr/lib/sentinel/VERSION"
 install -m 0644 "$SOURCE_DIR/io.sentinel.VideoClient.svg" \
     "$PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/io.sentinel.VideoClient.svg"

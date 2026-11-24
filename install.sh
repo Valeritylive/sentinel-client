@@ -9,8 +9,9 @@ ICON_DIR="$DATA_ROOT/icons/hicolor/scalable/apps"
 
 mkdir -p "$APP_DIR" "$DESKTOP_DIR" "$ICON_DIR"
 install -m 0755 "$SOURCE_DIR/app.py" "$APP_DIR/app.py"
-install -m 0644 "$SOURCE_DIR/sentinel_storage.py" "$APP_DIR/sentinel_storage.py"
-install -m 0644 "$SOURCE_DIR/sentinel_protocols.py" "$APP_DIR/sentinel_protocols.py"
+for module in sentinel_storage sentinel_protocols sentinel_layouts sentinel_shell sentinel_devmgmt; do
+    install -m 0644 "$SOURCE_DIR/$module.py" "$APP_DIR/$module.py"
+done
 install -m 0644 "$SOURCE_DIR/VERSION" "$APP_DIR/VERSION"
 install -m 0644 "$SOURCE_DIR/io.sentinel.VideoClient.svg" "$ICON_DIR/io.sentinel.VideoClient.svg"
 sed "s|@APP_PATH@|$APP_DIR/app.py|g" "$SOURCE_DIR/io.sentinel.VideoClient.desktop.in" > "$DESKTOP_DIR/io.sentinel.VideoClient.desktop"

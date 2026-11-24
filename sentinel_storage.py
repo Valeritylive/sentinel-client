@@ -6,6 +6,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import threading
 from pathlib import Path
 
 APP_ID = "io.sentinel.VideoClient"
@@ -13,18 +14,29 @@ SECRET_LABEL = "Sentinel camera credentials"
 DATA = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "sentinel"
 DB_PATH = DATA / "devices.sqlite3"
 
+_initialized: set[str] = set()
+_init_lock = threading.Lock()
+
 
 class CredentialStoreError(RuntimeError):
     """Raised when device credentials cannot be safely read or written."""
 
 
-def database():
-    DATA.mkdir(parents=True, exist_ok=True)
-    os.chmod(DATA, 0o700)
-    db = sqlite3.connect(DB_PATH)
-    os.chmod(DB_PATH, 0o600)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA secure_delete=ON")
+class _ClosingConnection(sqlite3.Connection):
+    """Commits/rolls back *and closes* when its ``with`` block ends.
+
+    Plain sqlite3 ``__exit__`` only ends the transaction, so every
+    ``with database() as db`` used to leave a connection open.
+    """
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            return super().__exit__(exc_type, exc, tb)
+        finally:
+            self.close()
+
+
+def _create_schema(db: sqlite3.Connection) -> None:
     db.execute("""CREATE TABLE IF NOT EXISTS devices (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL, host TEXT NOT NULL, sdk_port INTEGER NOT NULL DEFAULT 8000,
@@ -78,13 +90,122 @@ def database():
                 db.execute("DROP TABLE devices_legacy")
                 break
     db.execute("CREATE UNIQUE INDEX IF NOT EXISTS devices_host_sdk_channel ON devices(host,sdk_port,channel)")
+    _migrate_ivms_model(db)
     db.commit()
+
+
+def _add_column(db: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    if column not in {row[1] for row in db.execute(f"PRAGMA table_info({table})")}:
+        db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
+def _migrate_ivms_model(db: sqlite3.Connection) -> None:
+    """Группы устройств, сведения об устройстве и пользовательские деления окон."""
+    db.execute("""CREATE TABLE IF NOT EXISTS groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+    _add_column(db, "devices", "group_id", "INTEGER REFERENCES groups(id) ON DELETE SET NULL")
+    _add_column(db, "devices", "serial_no", "TEXT NOT NULL DEFAULT ''")
+    _add_column(db, "devices", "device_model", "TEXT NOT NULL DEFAULT ''")
+    _add_column(db, "devices", "use_tls", "INTEGER NOT NULL DEFAULT 0")
+    _add_column(db, "devices", "host_name", "TEXT NOT NULL DEFAULT ''")
+    _add_column(db, "saved_views", "division", "TEXT NOT NULL DEFAULT ''")
+    db.execute("""CREATE TABLE IF NOT EXISTS custom_divisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+        cols INTEGER NOT NULL, rows INTEGER NOT NULL, cells TEXT NOT NULL)""")
+
+
+def _ensure_initialized() -> None:
+    """Create/migrate the schema once per database file, not on every query."""
+    key = str(DB_PATH)
+    if key in _initialized and DB_PATH.exists():
+        return
+    with _init_lock:
+        if key in _initialized and DB_PATH.exists():
+            return
+        DATA.mkdir(parents=True, exist_ok=True)
+        os.chmod(DATA, 0o700)
+        db = sqlite3.connect(DB_PATH, factory=_ClosingConnection, timeout=10)
+        os.chmod(DB_PATH, 0o600)
+        with db:
+            _create_schema(db)
+        _initialized.add(key)
+
+
+def database():
+    """Short-lived connection; use as ``with database() as db:`` (closed on exit)."""
+    _ensure_initialized()
+    db = sqlite3.connect(DB_PATH, factory=_ClosingConnection, timeout=10)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA secure_delete=ON")
     return db
 
 
 def load_devices():
     with database() as db:
         return [dict(row) for row in db.execute("SELECT * FROM devices ORDER BY host,channel,name")]
+
+
+def load_groups():
+    with database() as db:
+        return [dict(row) for row in db.execute("SELECT * FROM groups ORDER BY name COLLATE NOCASE")]
+
+
+def add_group(name: str) -> int:
+    name = name.strip()
+    if not name:
+        raise ValueError("Пустое имя группы")
+    with database() as db:
+        row = db.execute("SELECT id FROM groups WHERE name=?", (name,)).fetchone()
+        if row:
+            return row["id"]
+        return db.execute("INSERT INTO groups(name) VALUES(?)", (name,)).lastrowid
+
+
+def rename_group(group_id: int, name: str) -> None:
+    name = name.strip()
+    if not name:
+        raise ValueError("Пустое имя группы")
+    with database() as db:
+        db.execute("UPDATE groups SET name=? WHERE id=?", (name, group_id))
+
+
+def delete_group(group_id: int) -> None:
+    """Устройства группы остаются, но становятся «без группы»."""
+    with database() as db:
+        db.execute("UPDATE devices SET group_id=NULL WHERE group_id=?", (group_id,))
+        db.execute("DELETE FROM groups WHERE id=?", (group_id,))
+
+
+def set_device_group(device_ids, group_id) -> None:
+    with database() as db:
+        db.executemany("UPDATE devices SET group_id=? WHERE id=?", [(group_id, int(i)) for i in device_ids])
+
+
+def load_custom_divisions():
+    import json
+    with database() as db:
+        rows = db.execute("SELECT * FROM custom_divisions ORDER BY name COLLATE NOCASE").fetchall()
+    return [{"id": r["id"], "name": r["name"], "cols": r["cols"], "rows": r["rows"],
+             "cells": [tuple(c) for c in json.loads(r["cells"])]} for r in rows]
+
+
+def save_custom_division(name: str, cols: int, rows: int, cells) -> None:
+    import json
+    from sentinel_layouts import validate_cells
+    name = name.strip()
+    cells = [tuple(int(v) for v in c) for c in cells]
+    if not name or not validate_cells(cols, rows, cells):
+        raise ValueError("Некорректное пользовательское деление")
+    with database() as db:
+        db.execute("""INSERT INTO custom_divisions(name,cols,rows,cells) VALUES(?,?,?,?)
+            ON CONFLICT(name) DO UPDATE SET cols=excluded.cols, rows=excluded.rows, cells=excluded.cells""",
+                   (name, cols, rows, json.dumps(cells)))
+
+
+def delete_custom_division(name: str) -> None:
+    with database() as db:
+        db.execute("DELETE FROM custom_divisions WHERE name=?", (name,))
 
 
 def _secret_tool(action: str, device, secret: str | None = None) -> str | None:
