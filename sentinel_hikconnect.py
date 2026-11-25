@@ -641,6 +641,18 @@ def apply_cloud_status() -> int:
     return changed
 
 
+CODE_NAMESPACE = "hikconnect-code"
+
+
+def load_validate_code(serial) -> str:
+    """Код проверки устройства (для зашифрованного видео) из хранилища секретов."""
+    value = storage.load_json_secret(CODE_NAMESPACE, serial) or {}
+    return str(value.get("code") or "")
+
+
+def save_validate_code(serial, code) -> None:
+    storage.save_json_secret(CODE_NAMESPACE, serial, {"code": str(code).strip()})
+
 def account_for_serial(serial):
     """Аккаунт Hik-Connect, к которому привязано устройство с этим серийным номером."""
     with storage.database() as db:

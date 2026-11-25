@@ -35,7 +35,8 @@ ERROR_TITLES = {
     "session": "сессия Hik-Connect истекла: откройте «Hik-Connect» и войдите снова",
     "not_found": "облако не нашло этот канал (камера не в сети или канал не подключён)",
     "negotiation": "облачный ретранслятор отказал в потоке",
-    "encrypted": "видео на регистраторе зашифровано, облачный просмотр таких потоков пока не поддерживается",
+    "encrypted": "видео на регистраторе зашифровано: нужен код проверки устройства",
+    "bad_code": "код проверки устройства не подошёл",
     "no_video": "облако не прислало видео в понятном формате",
     "ffmpeg": "для облачного видео нужен FFmpeg",
     "failed": "ошибка облачного потока",
@@ -80,7 +81,7 @@ def stream_kind(device) -> int:
     return STREAM_MAIN if (device.get("stream") or "main") == "main" else STREAM_SUB
 
 
-def build_request(device, session_state) -> dict:
+def build_request(device, session_state, validate_code="") -> dict:
     """Задание помощнику: какой канал открыть и с какой сессией Hik-Connect."""
     if not device.get("cloud_serial"):
         raise ValueError("Устройство не из Hik-Connect")
@@ -94,6 +95,7 @@ def build_request(device, session_state) -> dict:
         "channel": int(device.get("channel") or 1),
         "stream": stream_kind(device),
         "ffmpeg": shutil.which("ffmpeg") or "ffmpeg",
+        "validate_code": (validate_code or "").strip(),
     }
 
 
@@ -198,64 +200,117 @@ def guess_codec(payload: bytes) -> str | None:
     return None
 
 
+HIK_ENCRYPTION_PROFILE = 0x4000     # RTP-расширение Hikvision у зашифрованных NAL
+HIK_ENCRYPTED_PREFIX = 4096         # шифруются только первые 4096 байт тела NAL (AES-128, блоками по 16)
+H264_PROFILES = {44, 66, 77, 83, 86, 88, 100, 110, 118, 122, 128, 134, 135, 138, 139, 144, 244}
+
+
+def rtp_extension_profile(packet: bytes) -> int | None:
+    if len(packet) < 12 or not packet[0] & 0x10:
+        return None
+    header = 12 + 4 * (packet[0] & 0x0F)
+    return int.from_bytes(packet[header:header + 2], "big") if len(packet) >= header + 4 else None
+
+
+def plausible_parameter_set(codec, nal: bytes) -> bool | None:
+    """Проверка расшифровки по VPS (H.265) или SPS (H.264). None — это не набор параметров."""
+    if codec == H265 and len(nal) >= 6 and (nal[0] >> 1) & 0x3F == 32:
+        return nal[4:6] == b"\xff\xff" and nal[2] & 0x0C == 0x0C
+    if codec == H264 and len(nal) >= 4 and nal[0] & 0x1F == 7:
+        return nal[1] in H264_PROFILES
+    return None
+
+
+def decrypt_nal(codec, nal: bytes, block_decrypt) -> bytes:
+    """Расшифровать тело NAL (заголовок открыт): первые 4096 байт целыми блоками по 16."""
+    header = 2 if codec == H265 else 1
+    body = nal[header:header + HIK_ENCRYPTED_PREFIX]
+    size = len(body) - len(body) % 16
+    if size <= 0:
+        return nal
+    return nal[:header] + block_decrypt(body[:size]) + nal[header + size:]
+
+
 class RtpDepacketizer:
-    """RTP (RFC 6184 / RFC 7798) → Annex B. Пакеты с другим payload type (метаданные Hikvision) пропускаются."""
+    """RTP (RFC 6184 / RFC 7798) → целые NAL. Пакеты с другим payload type (метаданные Hikvision) пропускаются.
+
+    ``encrypted`` — устройство шифрует видео (расширение RTP 0x4000 на видеопакетах).
+    """
 
     def __init__(self):
         self.codec = None
         self.video_pt = None
+        self.encrypted = False
+        self._fu = None
 
     def feed(self, packet: bytes) -> bytes:
+        """Annex B без расшифровки (MPEG-PS — как есть)."""
+        if self.codec == MPEG_PS:
+            pt, payload = rtp_payload(packet)
+            return payload if pt == self.video_pt else b""
+        nals = self.feed_nals(packet)
+        if self.codec == MPEG_PS:
+            return rtp_payload(packet)[1]
+        return b"".join(_SC + nal for nal in nals)
+
+    def feed_nals(self, packet: bytes) -> list[bytes]:
         pt, payload = rtp_payload(packet)
         if not payload:
-            return b""
+            return []
         if self.video_pt is None:
             codec = MPEG_PS if payload.startswith(b"\x00\x00\x01\xba") else guess_codec(payload)
             if codec is None:
-                return b""
+                return []
             self.codec, self.video_pt = codec, pt
-        if pt != self.video_pt:
-            return b""
-        if self.codec == MPEG_PS:            # Hikvision часто кладёт в RTP программный поток MPEG-PS
-            return payload
+        if pt != self.video_pt or self.codec == MPEG_PS:   # Hikvision часто кладёт в RTP поток MPEG-PS
+            return []
+        if rtp_extension_profile(packet) == HIK_ENCRYPTION_PROFILE:
+            self.encrypted = True
         return self._h265(payload) if self.codec == H265 else self._h264(payload)
 
-    @staticmethod
-    def _h265(p: bytes) -> bytes:
+    def _fragment(self, start, end, header, data):
+        if start:
+            self._fu = bytearray(header)
+        if self._fu is None:
+            return []                       # середина NAL без начала — пропускаем
+        self._fu += data
+        if not end:
+            return []
+        nal, self._fu = bytes(self._fu), None
+        return [nal]
+
+    def _h265(self, p: bytes) -> list[bytes]:
         if len(p) < 3:
-            return b""
+            return []
         nal_type = (p[0] >> 1) & 0x3F
         if nal_type == 49:                          # FU
             fu = p[2]
-            if fu & 0x80:
-                return _SC + bytes([(p[0] & 0x81) | ((fu & 0x3F) << 1), p[1]]) + p[3:]
-            return p[3:]
+            header = bytes([(p[0] & 0x81) | ((fu & 0x3F) << 1), p[1]])
+            return self._fragment(fu & 0x80, fu & 0x40, header, p[3:])
         if nal_type == 48:                          # AP
-            out, i = bytearray(), 2
-            while i + 2 <= len(p):
-                size = int.from_bytes(p[i:i + 2], "big")
-                out += _SC + p[i + 2:i + 2 + size]
-                i += 2 + size
-            return bytes(out)
-        return _SC + p
+            return _aggregated(p, 2)
+        return [p]
 
-    @staticmethod
-    def _h264(p: bytes) -> bytes:
+    def _h264(self, p: bytes) -> list[bytes]:
         nal_type = p[0] & 0x1F
         if nal_type == 28:                          # FU-A
             if len(p) < 2:
-                return b""
-            if p[1] & 0x80:
-                return _SC + bytes([(p[0] & 0xE0) | (p[1] & 0x1F)]) + p[2:]
-            return p[2:]
+                return []
+            header = bytes([(p[0] & 0xE0) | (p[1] & 0x1F)])
+            return self._fragment(p[1] & 0x80, p[1] & 0x40, header, p[2:])
         if nal_type == 24:                          # STAP-A
-            out, i = bytearray(), 1
-            while i + 2 <= len(p):
-                size = int.from_bytes(p[i:i + 2], "big")
-                out += _SC + p[i + 2:i + 2 + size]
-                i += 2 + size
-            return bytes(out)
-        return _SC + p
+            return _aggregated(p, 1)
+        return [p]
+
+
+def _aggregated(p: bytes, offset: int) -> list[bytes]:
+    out, i = [], offset
+    while i + 2 <= len(p):
+        size = int.from_bytes(p[i:i + 2], "big")
+        if size:
+            out.append(p[i + 2:i + 2 + size])
+        i += 2 + size
+    return out
 
 
 # ==================================================================== помощник (окружение cloud-runtime)
@@ -263,6 +318,19 @@ def _fail(code, detail=""):
     sys.stderr.write(ERROR_PREFIX + json.dumps({"code": code, "detail": str(detail)[:300]}) + "\n")
     sys.stderr.flush()
     return 2
+
+
+class _HelperFailure(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+def _aes_ecb(key: bytes):
+    """Расшифровка блоков AES-128 (CBC с нулевым IV на каждый блок = ECB)."""
+    from Crypto.Cipher import AES
+    cipher = AES.new(key, AES.MODE_ECB)
+    return cipher.decrypt
 
 
 def _info(text):
@@ -335,6 +403,8 @@ def helper_main() -> int:      # pragma: no cover - нужен реальный 
     ffmpeg = None
     pending = bytearray()
     seen, samples, got_video = 0, [], threading.Event()
+    keys = {"active": None, "candidates": None}
+    code = (request.get("validate_code") or "").strip()
     _info(f"поток открыт: result={getattr(info, 'result', None)} stream={request.get('stream')}")
 
     def watchdog():
@@ -342,6 +412,39 @@ def helper_main() -> int:      # pragma: no cover - нужен реальный 
         if not got_video.wait(NO_VIDEO_TIMEOUT):
             _fail("no_video", f"пакетов {seen}, начало: {' '.join(samples) or 'нет данных'}")
             os._exit(2)
+
+    def candidates():
+        # Ключ — код проверки устройства; облако может выдать по нему отдельный ключ шифрования.
+        if keys["candidates"] is None:
+            found = []
+            try:
+                found.append(client.query_device_encrypt_key(request["serial"], code))
+            except Exception as exc:
+                _info(f"облако не выдало ключ: {exc}")
+            found.append(code)
+            keys["candidates"] = [_aes_ecb((k or "").encode()[:16].ljust(16, b"\0")) for k in found if k]
+        return keys["candidates"]
+
+    def video_nals(packet_body):
+        """Целые NAL (расшифрованные) или None, если пакет ещё ничего не дал."""
+        nals = depacketizer.feed_nals(packet_body)
+        if not depacketizer.encrypted:
+            return nals
+        if not code:
+            raise _HelperFailure("encrypted")
+        result = []
+        for nal in nals:
+            if keys["active"] is None:
+                if plausible_parameter_set(depacketizer.codec, nal) is None:
+                    continue                    # до набора параметров ключ не проверить
+                keys["active"] = next((k for k in candidates()
+                                       if plausible_parameter_set(depacketizer.codec,
+                                                                  decrypt_nal(depacketizer.codec, nal, k))), None)
+                if keys["active"] is None:
+                    raise _HelperFailure("bad_code")
+                _info("видео расшифровано")
+            result.append(decrypt_nal(depacketizer.codec, nal, keys["active"]))
+        return result
 
     threading.Thread(target=watchdog, daemon=True).start()
     try:
@@ -356,12 +459,16 @@ def helper_main() -> int:      # pragma: no cover - нужен реальный 
             transport = detect_transport(packet.body)
             if transport in (StreamTransport.MPEG_PS, StreamTransport.MPEG_TS) and depacketizer.codec is None:
                 chunk, codec = packet.body, "mpeg" if transport == StreamTransport.MPEG_PS else "mpegts"
+            elif depacketizer.codec == MPEG_PS:
+                chunk, codec = depacketizer.feed(packet.body), MPEG_PS
             else:
-                chunk, codec = depacketizer.feed(packet.body), depacketizer.codec
+                nals = video_nals(packet.body)
+                codec = depacketizer.codec
+                chunk = b"".join(_SC + nal for nal in nals)
             if not chunk or codec is None:
                 continue
             if ffmpeg is None:
-                _info(f"видео: {codec}")
+                _info(f"видео: {codec}" + (" (зашифровано)" if depacketizer.encrypted else ""))
                 got_video.set()
                 ffmpeg = _ffmpeg(request.get("ffmpeg") or "ffmpeg", codec)
             pending += chunk
@@ -372,6 +479,8 @@ def helper_main() -> int:      # pragma: no cover - нужен реальный 
         if ffmpeg is None:
             return _fail("no_video")
         return _fail("failed", "облако закрыло поток")
+    except _HelperFailure as exc:
+        return _fail(exc.code)
     except (BrokenPipeError, OSError):
         return 0
     except Exception as exc:

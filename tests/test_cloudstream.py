@@ -54,6 +54,40 @@ class RtpTests(unittest.TestCase):
         self.assertEqual(out, sc + b"\x67SPS" + sc + b"\x65IDR1IDR2" + sc + b"\x68P" + sc + b"\x06S")
 
 
+class EncryptionTests(unittest.TestCase):
+    def test_encryption_flag_from_rtp_extension(self):
+        dep = cs.RtpDepacketizer()
+        dep.feed_nals(rtp(b"\x40\x01" + b"\x00" * 20))
+        self.assertFalse(dep.encrypted)
+        ext = b"\x80\x06\x00\x01\x11\x21\x02\x01"
+        packet = bytearray(rtp(b"\x40\x01" + b"\x00" * 20, extension=ext))
+        packet[12:14] = b"\x40\x00"                       # профиль расширения Hikvision 0x4000
+        dep.feed_nals(bytes(packet))
+        self.assertTrue(dep.encrypted)
+
+    def test_decrypt_nal_only_full_blocks_of_prefix(self):
+        nal = b"\x40\x01" + bytes(range(40))
+        out = cs.decrypt_nal(cs.H265, nal, lambda data: bytes(b ^ 0xFF for b in data))
+        self.assertEqual(out[:2], b"\x40\x01")
+        self.assertEqual(out[2:34], bytes(b ^ 0xFF for b in range(32)))
+        self.assertEqual(out[34:], bytes(range(32, 40)))
+        self.assertEqual(cs.decrypt_nal(cs.H264, b"\x67abc", lambda d: b"X" * len(d)), b"\x67abc")
+        big = b"\x26\x01" + b"\x01" * 5000
+        self.assertEqual(cs.decrypt_nal(cs.H265, big, lambda d: b"\x00" * len(d)).count(b"\x00"), 4096)
+
+    def test_parameter_set_plausibility(self):
+        self.assertTrue(cs.plausible_parameter_set(cs.H265, bytes.fromhex("40010c01ffff016000000300")))
+        self.assertFalse(cs.plausible_parameter_set(cs.H265, bytes.fromhex("40010724cdb3ebf5faf379c8")))
+        self.assertIsNone(cs.plausible_parameter_set(cs.H265, bytes.fromhex("26010000000000")))
+        self.assertTrue(cs.plausible_parameter_set(cs.H264, bytes.fromhex("67640028")))
+        self.assertFalse(cs.plausible_parameter_set(cs.H264, bytes.fromhex("67ab0028")))
+
+    def test_fragment_without_start_is_dropped(self):
+        dep = cs.RtpDepacketizer()
+        dep.feed_nals(rtp(b"\x40\x01VPS"))
+        self.assertEqual(dep.feed_nals(rtp(b"\x62\x01" + bytes([0x40 | 1]) + b"tail")), [])
+
+
 class PsTests(unittest.TestCase):
     def test_mpeg_ps_in_rtp_is_passed_through(self):
         dep = cs.RtpDepacketizer()
@@ -68,7 +102,8 @@ class RequestTests(unittest.TestCase):
     def test_build_request_and_stream_kind(self):
         device = {"cloud_serial": "FH2381693", "channel": 3, "stream": "sub"}
         request = cs.build_request(device, {"api_url": "https://apiisgp.hik-connect.com", "session_id": "s",
-                                            "feature_code": "f"})
+                                            "feature_code": "f"}, " ABCDEF ")
+        self.assertEqual(request["validate_code"], "ABCDEF")
         self.assertEqual((request["serial"], request["channel"], request["stream"], request["feature_code"]),
                          ("FH2381693", 3, cs.STREAM_SUB, "f"))
         self.assertEqual(cs.stream_kind({"stream": "main"}), cs.STREAM_MAIN)

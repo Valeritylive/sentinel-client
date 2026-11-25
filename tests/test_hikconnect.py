@@ -176,6 +176,11 @@ class AccountFlowTests(unittest.TestCase):
         with self.assertRaises(hc.HikConnectError):
             hc.cloud_session("NOPE", client_factory=self.factory)
 
+    def test_validate_code_roundtrip(self):
+        self.assertEqual(hc.load_validate_code("Q12345678"), "")
+        hc.save_validate_code("Q12345678", " ABCDEF ")
+        self.assertEqual(hc.load_validate_code("Q12345678"), "ABCDEF")
+
 class StreamHintTests(unittest.TestCase):
     def test_private_address_hint(self):
         device = {"cloud_serial": "FE0562391", "host_name": "Arami64", "host": "192.168.6.127", "rtsp_port": 554}

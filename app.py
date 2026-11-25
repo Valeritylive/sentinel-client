@@ -2073,13 +2073,38 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         except hikconnect.HikConnectError as exc:
             raise RuntimeError(f"{device['name']}: облачное видео недоступно: {exc}") from exc
         try:
-            return cloudstream.CloudStreamProcess(cloudstream.build_request(device, session_state))
+            code = hikconnect.load_validate_code(device["cloud_serial"])
+        except CredentialStoreError:
+            code = ""
+        try:
+            return cloudstream.CloudStreamProcess(cloudstream.build_request(device, session_state, code))
         except cloudstream.CloudStreamError as exc:
             if exc.code == "runtime":
                 self._install_cloud_runtime()
                 raise RuntimeError("Устанавливается модуль облачного видео Hik-Connect (один раз, около минуты). "
                                    "Откройте камеру снова, когда появится сообщение об установке.") from exc
             raise RuntimeError(f"{device['name']}: {exc}") from exc
+
+    def _ask_validate_code(self, slot, device, state, error):
+        """Видео зашифровано: спросить код проверки (6 заглавных букв на наклейке регистратора)."""
+        serial = device["cloud_serial"]
+        title = (f"{device.get('host_name') or device['name']}: {error}. Введите код проверки устройства "
+                 "(6 заглавных букв на наклейке или в настройках шифрования регистратора)")
+
+        def save(code):
+            try:
+                hikconnect.save_validate_code(serial, code.upper())
+            except CredentialStoreError as exc:
+                self.notify(f"Код не сохранён: {exc}", error=True)
+                return
+            try:
+                self._start_preview(slot, device, state.get("credentials") or {},
+                                    stream_override=state.get("device", {}).get("stream"))
+            except Exception as exc:
+                self.notify(str(exc), error=True)
+
+        self.notify(title, error=True)
+        self._ask_text(f"Код проверки · {device.get('host_name') or device['name']}", "", save)
 
     def _install_cloud_runtime(self):
         if getattr(self, "_cloud_install_running", False):
@@ -3311,6 +3336,10 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             text = f"{(device or {}).get('name', '')}: облачное видео недоступно — {error or message}"
             if error is not None and error.code == "runtime":
                 self._install_cloud_runtime()
+            if (error is not None and error.code in ("encrypted", "bad_code") and device
+                    and not getattr(self, "silent_stream_errors", False)):
+                self._ask_validate_code(slot, device, state, error)
+                return GLib.SOURCE_REMOVE
             if getattr(self, "silent_stream_errors", False):
                 if slot < len(self.video_slots):
                     self.video_slots[slot]["placeholder"].set_text(f"{slot + 1}\n\nПоток недоступен")
