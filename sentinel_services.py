@@ -145,6 +145,8 @@ class ServicesMixin:
             delay = min(delay * 2, RECONNECT_MAX)
 
     def _device_went_offline(self, device):
+        if _cloud_online().get(device.get("cloud_serial")):
+            return False    # регистратор из Hik-Connect недоступен напрямую, но в облаке он в сети
         self._set_device_status(device["host"], "offline")
         event = {"time": datetime.now().astimezone().isoformat(timespec="seconds"), "device_id": device["id"],
                  "device_name": device.get("host_name") or device["host"], "channel": "", "raw_type": "device_offline",
@@ -468,6 +470,9 @@ class ServicesMixin:
 
     def _status_done(self, results, quiet):
         stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+        cloud_online = _cloud_online()
+        results = [(device, "online" if status == "offline" and cloud_online.get(device.get("cloud_serial")) else status,
+                    info) for device, status, info in results]
         with storage.database() as db:
             for device, status, info in results:
                 db.execute("UPDATE devices SET status=?, status_checked_at=? WHERE host=? AND http_port=?",
@@ -586,3 +591,12 @@ class ServicesMixin:
             self.notify("Нет назначений: добавьте двери в уровни доступа и назначьте их персонам/отделам")
             return
         threading.Thread(target=worker, daemon=True).start()
+
+
+def _cloud_online():
+    """{серийный номер: в сети ли устройство по данным Hik-Connect}; пусто, если облака нет."""
+    try:
+        import sentinel_hikconnect as hikconnect
+        return hikconnect.cloud_status_map()
+    except Exception:
+        return {}
