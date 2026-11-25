@@ -113,6 +113,136 @@ def _migrate_ivms_model(db: sqlite3.Connection) -> None:
     db.execute("""CREATE TABLE IF NOT EXISTS custom_divisions (
         id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
         cols INTEGER NOT NULL, rows INTEGER NOT NULL, cells TEXT NOT NULL)""")
+    _migrate_hcl_model(db)
+
+
+def _migrate_hcl_model(db: sqlite3.Connection) -> None:
+    """Таблицы модулей в стиле HikCentral Lite: виды, персоны, ТС, доступ, тревоги, пользователи."""
+    db.execute("""CREATE TABLE IF NOT EXISTS view_groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)""")
+    _add_column(db, "saved_views", "group_id", "INTEGER REFERENCES view_groups(id) ON DELETE SET NULL")
+    _add_column(db, "devices", "area", "TEXT NOT NULL DEFAULT ''")
+    _add_column(db, "devices", "firmware", "TEXT NOT NULL DEFAULT ''")
+    _add_column(db, "devices", "time_zone", "TEXT NOT NULL DEFAULT ''")
+    _add_column(db, "devices", "category", "TEXT NOT NULL DEFAULT 'video'")
+    _add_column(db, "devices", "status", "TEXT NOT NULL DEFAULT ''")
+    _add_column(db, "devices", "status_checked_at", "TEXT NOT NULL DEFAULT ''")
+    _add_column(db, "devices", "door_count", "INTEGER NOT NULL DEFAULT 0")
+    _add_column(db, "devices", "alarm_outputs", "INTEGER NOT NULL DEFAULT 0")
+    db.execute("""CREATE TABLE IF NOT EXISTS web_pages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, url TEXT NOT NULL)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS departments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+        parent_id INTEGER REFERENCES departments(id) ON DELETE SET NULL)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS persons (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, employee_no TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL, department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+        gender TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '',
+        valid_from TEXT NOT NULL, valid_to TEXT NOT NULL,
+        cards TEXT NOT NULL DEFAULT '[]', pin TEXT NOT NULL DEFAULT '', remark TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS vehicle_lists (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS vehicles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, plate TEXT NOT NULL, plate_key TEXT NOT NULL,
+        list_id INTEGER NOT NULL REFERENCES vehicle_lists(id) ON DELETE CASCADE,
+        brand TEXT NOT NULL DEFAULT '', vehicle_type TEXT NOT NULL DEFAULT '', color TEXT NOT NULL DEFAULT '',
+        owner TEXT NOT NULL DEFAULT '', person_id INTEGER REFERENCES persons(id) ON DELETE SET NULL,
+        valid_from TEXT NOT NULL DEFAULT '', valid_to TEXT NOT NULL DEFAULT '',
+        remark TEXT NOT NULL DEFAULT '', UNIQUE(plate_key, list_id))""")
+    db.execute("""CREATE TABLE IF NOT EXISTS schedules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL DEFAULT 'access', weekly TEXT NOT NULL)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS access_levels (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+        schedule_id INTEGER REFERENCES schedules(id) ON DELETE SET NULL,
+        doors TEXT NOT NULL DEFAULT '[]', remark TEXT NOT NULL DEFAULT '')""")
+    db.execute("""CREATE TABLE IF NOT EXISTS person_access_levels (
+        person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        level_id INTEGER NOT NULL REFERENCES access_levels(id) ON DELETE CASCADE,
+        PRIMARY KEY(person_id, level_id))""")
+    db.execute("""CREATE TABLE IF NOT EXISTS department_access_levels (
+        department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+        level_id INTEGER NOT NULL REFERENCES access_levels(id) ON DELETE CASCADE,
+        PRIMARY KEY(department_id, level_id))""")
+    db.execute("""CREATE TABLE IF NOT EXISTS access_apply_status (
+        person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        device_id INTEGER NOT NULL, status TEXT NOT NULL, message TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(person_id, device_id))""")
+    db.execute("""CREATE TABLE IF NOT EXISTS alarm_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+        enabled INTEGER NOT NULL DEFAULT 1, event_type TEXT NOT NULL,
+        sources TEXT NOT NULL DEFAULT '"all"', vehicle_lists TEXT NOT NULL DEFAULT '"all"',
+        priority TEXT NOT NULL DEFAULT 'medium', schedule_id INTEGER REFERENCES schedules(id) ON DELETE SET NULL,
+        recipients TEXT NOT NULL DEFAULT '["admin"]', linkage TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT NOT NULL, device_id INTEGER,
+        device_name TEXT NOT NULL DEFAULT '', channel TEXT NOT NULL DEFAULT '',
+        event_type TEXT NOT NULL, category TEXT NOT NULL DEFAULT 'event', state TEXT NOT NULL DEFAULT '',
+        details TEXT NOT NULL DEFAULT '{}', picture_path TEXT NOT NULL DEFAULT '')""")
+    db.execute("CREATE INDEX IF NOT EXISTS events_time ON events(time)")
+    db.execute("""CREATE TABLE IF NOT EXISTS alarm_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, rule_id INTEGER, rule_name TEXT NOT NULL DEFAULT '',
+        event_id INTEGER, time TEXT NOT NULL, device_id INTEGER, device_name TEXT NOT NULL DEFAULT '',
+        channel TEXT NOT NULL DEFAULT '', event_type TEXT NOT NULL, priority TEXT NOT NULL DEFAULT 'medium',
+        status TEXT NOT NULL DEFAULT 'unacknowledged', category TEXT NOT NULL DEFAULT '',
+        remarks TEXT NOT NULL DEFAULT '', details TEXT NOT NULL DEFAULT '{}',
+        picture_path TEXT NOT NULL DEFAULT '', acknowledged_at TEXT NOT NULL DEFAULT '',
+        acknowledged_by TEXT NOT NULL DEFAULT '')""")
+    db.execute("CREATE INDEX IF NOT EXISTS alarm_records_time ON alarm_records(time)")
+    db.execute("""CREATE TABLE IF NOT EXISTS roles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+        permissions TEXT NOT NULL DEFAULT '[]', builtin INTEGER NOT NULL DEFAULT 0)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL, role_id INTEGER REFERENCES roles(id) ON DELETE SET NULL,
+        email TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1,
+        expires TEXT NOT NULL DEFAULT '', password_changed_at TEXT NOT NULL DEFAULT '',
+        failed_attempts INTEGER NOT NULL DEFAULT 0, locked_until TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS operation_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT NOT NULL, username TEXT NOT NULL DEFAULT '',
+        action TEXT NOT NULL, target TEXT NOT NULL DEFAULT '', details TEXT NOT NULL DEFAULT '')""")
+    db.execute("""CREATE TABLE IF NOT EXISTS recording_plans (
+        device_id INTEGER PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+        enabled INTEGER NOT NULL DEFAULT 0, stream TEXT NOT NULL DEFAULT 'sub',
+        schedule TEXT NOT NULL DEFAULT '', retention_days INTEGER NOT NULL DEFAULT 30,
+        overwrite INTEGER NOT NULL DEFAULT 1)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS holidays (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+        start_date TEXT NOT NULL, end_date TEXT NOT NULL)""")
+
+
+def get_setting(key: str, default: str | None = None) -> str | None:
+    with database() as db:
+        row = db.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value) -> None:
+    with database() as db:
+        db.execute("INSERT INTO app_settings(key,value) VALUES(?,?) "
+                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value)))
+
+
+def get_json_setting(key: str, default=None):
+    raw = get_setting(key)
+    if raw is None:
+        return default
+    try:
+        value = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return default
+    if isinstance(default, dict) and isinstance(value, dict):
+        merged = dict(default)
+        merged.update(value)
+        return merged
+    return value
+
+
+def set_json_setting(key: str, value) -> None:
+    set_setting(key, json.dumps(value, ensure_ascii=False))
 
 
 def _ensure_initialized() -> None:
