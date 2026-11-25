@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Sentinel Server Settings
+Name[ru]=Настройки Sentinel Server
+Comment=Administrator password, network and TLS of the Sentinel server
+Comment[ru]=Логин и пароль администратора, сеть и TLS сервера Sentinel
+Exec=/usr/bin/sentinel-server-settings
+Icon=io.sentinel.Server
+Terminal=false
+Categories=Settings;System;Security;
+StartupNotify=true
+StartupWMClass=io.sentinel.ServerSettings
