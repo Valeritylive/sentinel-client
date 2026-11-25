@@ -19,9 +19,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            binutils desktop-file-utils fakeroot libgdk-pixbuf2.0-dev \
-            patchelf python3-pip python3-setuptools squashfs-tools strace \
-            util-linux zsync
+            binutils desktop-file-utils fakeroot gstreamer1.0-tools \
+            gtk-update-icon-cache libgdk-pixbuf2.0-dev patchelf python3-pip \
+            python3-setuptools squashfs-tools strace util-linux zsync
           python3 -m pip install --user appimage-builder==1.1.0 packaging==21.3
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
