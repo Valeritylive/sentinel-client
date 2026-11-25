@@ -1297,6 +1297,8 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             else:
                 self.slot_resources.pop(slot, None)
         self._select_slot(min(getattr(self, "selected_slot", 0), self.layout_count - 1))
+        if "layout_button" in self.__dict__:
+            self._update_layout_button()
 
     def _on_video_tile_click(self, index, presses):
         self._select_slot(index)

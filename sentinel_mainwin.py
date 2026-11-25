@@ -548,8 +548,9 @@ class MainWindowMixin:
         return box
 
     def _layout_menu(self):
-        menu = Gtk.MenuButton(label="▦")
-        menu.set_tooltip_text("Деление окон")
+        menu = Gtk.MenuButton(label="▦ 4 окна")
+        menu.set_tooltip_text("Количество окон в виде (деление экрана)")
+        self.layout_button = menu
         popover = Gtk.Popover()
         actions = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         W.margins(actions, 6)
@@ -568,6 +569,13 @@ class MainWindowMixin:
         popover.set_child(actions)
         menu.set_popover(popover)
         return menu
+
+    def _update_layout_button(self):
+        if "layout_button" in self.__dict__:
+            count = self.layout_count
+            word = "окно" if count % 10 == 1 and count % 100 != 11 else (
+                "окна" if count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14) else "окон")
+            self.layout_button.set_label(f"▦ {count} {word}")
 
     def _stream_menu(self):
         menu = Gtk.MenuButton(label="⇅")
@@ -610,8 +618,11 @@ class MainWindowMixin:
 
     def _apply_adaptive(self, width):
         decision = views.adaptive_layout(width, self.user_left_panel, self.user_right_panel)
-        self.left_revealer.set_reveal_child(decision.left)
-        self.right_revealer.set_reveal_child(decision.right)
+        # Скрытый Gtk.Revealer в GTK 4 продолжает занимать ширину панели —
+        # поэтому свёрнутую панель убираем из раскладки целиком.
+        for revealer, show in ((self.left_revealer, decision.left), (self.right_revealer, decision.right)):
+            revealer.set_reveal_child(show)
+            revealer.set_visible(show)
         self.left_panel.set_size_request(decision.left_width, -1)
         self.right_panel.set_size_request(decision.right_width, -1)
         self.left_handle.set_label("‹" if decision.left else "›")

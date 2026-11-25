@@ -52,6 +52,7 @@ class LayoutSmoke(ShellSmoke):
     def test_adaptive_layout_applies(self):
         decision = self.win._apply_adaptive(700)
         self.assertFalse(decision.left or decision.right)
+        self.assertFalse(self.win.left_revealer.get_visible() or self.win.right_revealer.get_visible())
         decision = self.win._apply_adaptive(1600)
         self.assertTrue(decision.left and decision.right)
 
@@ -95,6 +96,11 @@ class ViewTabSmoke(ShellSmoke):
             d = layouts.DIVISIONS[key]
             self.assertEqual(len(w.video_slots), d.count)
             self.assertEqual(w._current_cells(), list(d.cells))
+        self.assertEqual(w.layout_button.get_label(), "▦ 64 окна")
+        w._set_division("s1")
+        self.assertEqual(w.layout_button.get_label(), "▦ 1 окно")
+        w._set_division("s25")
+        self.assertEqual(w.layout_button.get_label(), "▦ 25 окон")
         self.assertFalse(w._set_division("nonexistent"))
 
     def test_desired_stream(self):
