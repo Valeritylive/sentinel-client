@@ -265,6 +265,11 @@ def _fail(code, detail=""):
     return 2
 
 
+def _info(text):
+    sys.stderr.write(f"sentinel-cloud: {text}\n")
+    sys.stderr.flush()
+
+
 def _all_vtm_pages(adapter):
     """Все страницы ресурсов VTM: сервер отдаёт максимум 30 за раз, а hikcloudstream читает одну."""
     merged = {"resourceInfos": [], "VTM": {}}
@@ -329,13 +334,18 @@ def helper_main() -> int:      # pragma: no cover - нужен реальный 
     depacketizer = RtpDepacketizer()
     ffmpeg = None
     pending = bytearray()
-    import time
-    started = time.monotonic()
-    seen, samples = 0, []
+    seen, samples, got_video = 0, [], threading.Event()
+    _info(f"поток открыт: result={getattr(info, 'result', None)} stream={request.get('stream')}")
+
+    def watchdog():
+        # iter_packets может молча ждать данных бесконечно: сообщаем и выходим сами.
+        if not got_video.wait(NO_VIDEO_TIMEOUT):
+            _fail("no_video", f"пакетов {seen}, начало: {' '.join(samples) or 'нет данных'}")
+            os._exit(2)
+
+    threading.Thread(target=watchdog, daemon=True).start()
     try:
         for packet in live._client.iter_packets():
-            if ffmpeg is None and time.monotonic() - started > NO_VIDEO_TIMEOUT:
-                return _fail("no_video", f"пакетов {seen}, начало: {' '.join(samples)}")
             if packet.body and len(samples) < 3:
                 samples.append(f"ch{packet.channel}:{packet.body[:16].hex()}")
             seen += 1
@@ -351,6 +361,8 @@ def helper_main() -> int:      # pragma: no cover - нужен реальный 
             if not chunk or codec is None:
                 continue
             if ffmpeg is None:
+                _info(f"видео: {codec}")
+                got_video.set()
                 ffmpeg = _ffmpeg(request.get("ffmpeg") or "ffmpeg", codec)
             pending += chunk
             if len(pending) >= 4096 or packet.body[1] & 0x80:
