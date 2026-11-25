@@ -20,6 +20,16 @@ python3 app.py
 
 ## Установка пакетов
 
+**Flatpak** (с версии 0.3.2, файл `Sentinel-<версия>-x86_64.flatpak` в релизе):
+
+```sh
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user ./Sentinel-0.3.2-x86_64.flatpak
+flatpak run io.sentinel.VideoClient
+```
+
+В Flatpak данные хранятся отдельно: `~/.var/app/io.sentinel.VideoClient/data/sentinel` (а не `~/.local/share/sentinel`). Снимки и записи — в `~/Pictures/Sentinel` и `~/Videos/Sentinel`.
+
 Релизные `.deb` и AppImage собираются GitHub Actions для x86_64. Debian-пакет устанавливает системные компоненты GTK и GStreamer через зависимости пакета; рецепт AppImage включает Python, GTK, GStreamer, Secret Service CLI и FFmpeg из Ubuntu 22.04. Видеодрайверы и системную службу Secret Service предоставляет рабочее окружение. Для публикации релиза создайте и отправьте тег, совпадающий с файлом `VERSION` (например, `v0.1.4`) — workflow проверит unit-тесты, соберёт пакеты и прикрепит их к GitHub Release. Сборку локально можно запустить на Ubuntu 22.04 с установленными `dpkg-deb`, `python3-pip` и зависимостями AppImageBuilder (`appimage-builder==1.1.0`, `packaging==21.3`):
 
 ```sh
