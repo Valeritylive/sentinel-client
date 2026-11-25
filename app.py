@@ -1281,8 +1281,9 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             scroll.connect("scroll", lambda _c, _dx, dy, i=index: self._digital_zoom(i, dy))
             pane.add_controller(scroll)
             zoom_drag = Gtk.GestureDrag()
-            zoom_drag.connect("drag-end", lambda _g, x, y, dx, dy, i=index, p=pane:
-                self._digital_zoom_region(i, x, y, dx, dy, p.get_width(), p.get_height()))
+            # drag-end передаёт только смещение; начальная точка берётся из get_start_point().
+            zoom_drag.connect("drag-end", lambda g, dx, dy, i=index, p=pane: self._digital_zoom_region(
+                i, *g.get_start_point()[1:], dx, dy, p.get_width(), p.get_height()))
             pane.add_controller(zoom_drag)
             aspect_frame.set_child(pane)
             col, row, colspan, rowspan = cells[index]
@@ -3197,7 +3198,13 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         source = "Hik-Connect" if cloud else preview_device["host"]
         self.video_slots[slot_index]["caption"].set_text(
             f"● {mode}   {preview_device['name']}  ·  {source} CH {preview_device['channel']}")
-        self.video_slots[slot_index]["placeholder"].set_visible(False)
+        placeholder = self.video_slots[slot_index]["placeholder"]
+        if cloud:
+            # Облако отдаёт первый кадр через 5–15 секунд: показываем, что идёт подключение.
+            placeholder.set_text(f"{slot_index + 1}\n\nПодключение через облако Hik-Connect…")
+            placeholder.set_visible(True)
+        else:
+            placeholder.set_visible(False)
         self._select_slot(slot_index)
         if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
             self._stop_stream(slot_index)
@@ -3241,6 +3248,8 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         if self.streams.get(slot_index) is not state or slot_index >= len(self.video_slots):
             return GLib.SOURCE_REMOVE
         slot = self.video_slots[slot_index]
+        if slot["placeholder"].get_visible():
+            slot["placeholder"].set_visible(False)
         aspect_ratio = width / height if height else 16 / 9
         if abs(slot["aspect_ratio"] - aspect_ratio) > 0.01:
             slot["aspect_ratio"] = aspect_ratio
