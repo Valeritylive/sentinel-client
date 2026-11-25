@@ -152,6 +152,61 @@ class AccountFlowTests(unittest.TestCase):
         self.assertIsNone(hc.load_session("user@example.com"))
 
 
+    def test_unreachable_cloud_device_keeps_cloud_online_status(self):
+        import sentinel_engine as engine_mod
+        hc.login_account("user@example.com", "secret", client_factory=self.factory)
+        hc.import_devices(["Q12345678"], None)
+        hc.apply_cloud_status()
+        engine = engine_mod.Engine(receive_events=False, recording_enabled=False, hikconnect_factory=self.factory)
+        self.addCleanup(engine.stop)
+        with patch.object(engine, "probe_status", return_value=("offline", {})):
+            engine.check_devices()
+        self.assertEqual({d["status"] for d in storage.load_devices()}, {"online"})
+        with storage.database() as db:
+            db.execute("UPDATE cloud_devices SET online=0")
+        with patch.object(engine, "probe_status", return_value=("offline", {})):
+            engine.check_devices()
+        self.assertEqual({d["status"] for d in storage.load_devices()}, {"offline"})
+
+    def test_cloud_session_for_imported_device(self):
+        hc.login_account("user@example.com", "secret", client_factory=self.factory)
+        state = hc.cloud_session("Q12345678", client_factory=self.factory)
+        self.assertEqual(state["session_id"], hc.load_session("user@example.com")["session_id"])
+        self.assertTrue(state["feature_code"])
+        with self.assertRaises(hc.HikConnectError):
+            hc.cloud_session("NOPE", client_factory=self.factory)
+
+    def test_validate_code_roundtrip(self):
+        self.assertEqual(hc.load_validate_code("Q12345678"), "")
+        hc.save_validate_code("Q12345678", " ABCDEF ")
+        self.assertEqual(hc.load_validate_code("Q12345678"), "ABCDEF")
+
+class StreamHintTests(unittest.TestCase):
+    def test_private_address_hint(self):
+        device = {"cloud_serial": "FE0562391", "host_name": "Arami64", "host": "192.168.6.127", "rtsp_port": 554}
+        hint = hc.stream_failure_hint(device, "gst-resource-error-quark: Не удалось открыть ресурс для чтения "
+                                              "и записи. (7)")
+        self.assertIn("Arami64", hint)
+        self.assertIn("VPN", hint)
+        self.assertIn("192.168.6.127:554", hint)
+
+    def test_auth_hint_mentions_device_password(self):
+        device = {"cloud_serial": "X", "name": "NVR", "host": "203.0.113.7"}
+        self.assertIn("не пароль аккаунта", hc.stream_failure_hint(device, "Unauthorized (401)"))
+
+    def test_public_address_and_non_cloud(self):
+        device = {"cloud_serial": "X", "name": "NVR", "host": "203.0.113.7", "rtsp_port": 10554}
+        self.assertIn("проброшен", hc.stream_failure_hint(device, "Could not connect to server"))
+        self.assertEqual(hc.stream_failure_hint({"host": "192.168.1.2"}, "Could not connect"), "")
+        self.assertEqual(hc.stream_failure_hint(device, "some decoder error"), "")
+
+    def test_private_host_detection(self):
+        self.assertTrue(hc.is_private_host("172.16.50.230"))
+        self.assertTrue(hc.is_private_host("169.254.42.234"))
+        self.assertFalse(hc.is_private_host("87.241.159.150"))
+        self.assertFalse(hc.is_private_host("cam.example.com"))
+
+
 class FileSecretBackendTests(unittest.TestCase):
     def test_file_backend_roundtrip_and_permissions(self):
         with tempfile.TemporaryDirectory() as temp, \

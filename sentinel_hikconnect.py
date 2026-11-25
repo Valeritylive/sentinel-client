@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import json
 import secrets
 import sqlite3
@@ -638,3 +639,81 @@ def apply_cloud_status() -> int:
                                  "online" if row["online"] else "offline"))
             changed += cursor.rowcount
     return changed
+
+
+CODE_NAMESPACE = "hikconnect-code"
+
+
+def load_validate_code(serial) -> str:
+    """Код проверки устройства (для зашифрованного видео) из хранилища секретов."""
+    value = storage.load_json_secret(CODE_NAMESPACE, serial) or {}
+    return str(value.get("code") or "")
+
+
+def save_validate_code(serial, code) -> None:
+    storage.save_json_secret(CODE_NAMESPACE, serial, {"code": str(code).strip()})
+
+def account_for_serial(serial):
+    """Аккаунт Hik-Connect, к которому привязано устройство с этим серийным номером."""
+    with storage.database() as db:
+        row = db.execute("""SELECT a.* FROM cloud_devices c JOIN cloud_accounts a ON a.id=c.account_id
+            WHERE c.serial=? ORDER BY a.last_sync DESC LIMIT 1""", (serial,)).fetchone()
+    return dict(row) if row else None
+
+
+def cloud_session(serial, client_factory=None) -> dict:
+    """Действующая сессия аккаунта устройства для облачного видео (продлевается при необходимости)."""
+    account = account_for_serial(serial)
+    if not account:
+        raise HikConnectError("Устройство не найдено в аккаунтах Hik-Connect: синхронизируйте аккаунт")
+    before = (load_session(account["account"]) or {}).get("session_id")
+    client = restore_client(account, client_factory=client_factory)
+    if client.session_id != before:
+        save_session(account["account"], client, remember=bool(account["remember_password"]))
+    return client.state()
+
+# ==================================================================== подсказки при ошибке видео
+_CONNECT_HINTS = ("resource", "ресурс", "could not connect", "connection refused", "timed out", "timeout",
+                  "no route", "unreachable", "не удалось открыть")
+_LAN_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10", "fc00::/7", "fe80::/10"))
+_AUTH_HINTS = ("401", "unauthorized", "not authorized", "authentication", "авториз")
+
+
+def is_private_host(host) -> bool:
+    """Адрес из частной сети (192.168.x.x, 10.x, 172.16-31.x, 169.254.x.x)."""
+    try:
+        address = ipaddress.ip_address(str(host or "").strip())
+    except ValueError:
+        return False
+    return any(address in network for network in _LAN_NETWORKS)
+
+
+def cloud_status_map() -> dict:
+    """{серийный номер: в сети ли устройство по данным Hik-Connect}."""
+    with storage.database() as db:
+        return {r["serial"]: bool(r["online"]) for r in db.execute("SELECT serial, online FROM cloud_devices")}
+
+
+def stream_failure_hint(device, message) -> str:
+    """Понятное объяснение ошибки потока для устройства, импортированного из Hik-Connect.
+
+    Пустая строка — устройство не облачное или причина не распознана.
+    """
+    if not device or not device.get("cloud_serial"):
+        return ""
+    text = str(message or "").lower()
+    name = device.get("host_name") or device.get("name") or device.get("cloud_serial")
+    host = device.get("host", "")
+    if any(h in text for h in _AUTH_HINTS):
+        return (f"{name}: регистратор отклонил логин или пароль. Нужны учётные данные самого регистратора "
+                "(обычно admin), а не пароль аккаунта Hik-Connect. Укажите их в «Система › Устройства».")
+    if any(h in text for h in _CONNECT_HINTS):
+        if is_private_host(host):
+            return (f"{name}: нет связи с {host}:{device.get('rtsp_port', 554)}. Это локальный адрес сети "
+                    "объекта из Hik-Connect, напрямую он доступен только через VPN или после проброса "
+                    "RTSP-порта (укажите внешний адрес в «Система › Устройства»). Без этого видео "
+                    "идёт через облако Hik-Connect.")
+        return (f"{name}: нет связи с {host}:{device.get('rtsp_port', 554)}. Проверьте, что RTSP-порт "
+                "проброшен на роутере объекта, или подключитесь к его сети через VPN.")
+    return ""
