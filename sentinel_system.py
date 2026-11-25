@@ -138,6 +138,8 @@ class SystemWindow(Gtk.Window):
         self._show(section)
         if sub == "add" and section == "devices":
             self.show_add_device()
+        elif sub == "hikconnect" and section == "devices":
+            self.show_add_device("hikconnect")
         elif sub and sub.startswith("details:") and section == "devices":
             self.show_device_details(int(sub.split(":", 1)[1]))
         elif sub == "add" and section == "person":
@@ -286,11 +288,13 @@ class SystemWindow(Gtk.Window):
         methods.set_size_request(240, -1)
         methods.append(W.label("1. Способ добавления", "section-title"))
         self.add_methods = Gtk.Stack()
+        self.add_method_cards = {}
         first = None
         for key, title, text in (
                 ("auto", "Автопоиск", "Устройство и клиент в одной локальной сети (поиск SADP)."),
                 ("batch", "Пакетный импорт", "IP, порты и учётные данные нескольких устройств из CSV."),
-                ("manual", "Вручную", "Известен адрес одного устройства или диапазон IP.")):
+                ("manual", "Вручную", "Известен адрес одного устройства или диапазон IP."),
+                ("hikconnect", "Hik-Connect", "Устройства, привязанные к облачному аккаунту Hikvision (P2P).")):
             card = Gtk.ToggleButton()
             card.add_css_class("method-card")
             inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -301,7 +305,8 @@ class SystemWindow(Gtk.Window):
                 card.set_group(first)
             else:
                 first = card
-            card.connect("toggled", lambda b, k=key: b.get_active() and self.add_methods.set_visible_child_name(k))
+            card.connect("toggled", lambda b, k=key: b.get_active() and self._select_add_method(k))
+            self.add_method_cards[key] = card
             methods.append(card)
         body.append(methods)
 
@@ -342,6 +347,12 @@ class SystemWindow(Gtk.Window):
         manual.append(_toolbar(W.button("Открыть форму добавления…", self.owner.add_device, "red-button"),
                                W.button("Добавить контроллер доступа…", self.add_access_controller)))
         self.add_methods.add_named(manual, "manual")
+        from sentinel_cloud_ui import HikConnectPanel
+        self.hikconnect_panel = HikConnectPanel(self.owner)
+        cloud_scroll = Gtk.ScrolledWindow()
+        cloud_scroll.set_vexpand(True)
+        cloud_scroll.set_child(self.hikconnect_panel)
+        self.add_methods.add_named(cloud_scroll, "hikconnect")
         self.add_methods.set_hexpand(True)
         body.append(self.add_methods)
         body.set_vexpand(True)
@@ -349,8 +360,16 @@ class SystemWindow(Gtk.Window):
         first.set_active(True)
         return page
 
-    def show_add_device(self):
+    def show_add_device(self, method=None):
         self.devices_stack.set_visible_child_name("add")
+        if method and method in self.add_method_cards:
+            self.add_method_cards[method].set_active(True)
+            self._select_add_method(method)
+
+    def _select_add_method(self, key):
+        self.add_methods.set_visible_child_name(key)
+        if key == "hikconnect":
+            self.hikconnect_panel.refresh()
 
     def scan_network(self):
         self.scan_status.set_text("Поиск…")

@@ -1,0 +1,38 @@
+[Unit]
+Description=Sentinel Server (video surveillance management service)
+Documentation=file:///usr/share/doc/sentinel-server/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sentinel
+Group=sentinel
+EnvironmentFile=-/etc/default/sentinel-server
+Environment=SENTINEL_DATA_DIR=/var/lib/sentinel-server
+Environment=SENTINEL_CREDENTIAL_STORE=file
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/sentinel-server run $SENTINEL_OPTS
+Restart=on-failure
+RestartSec=5
+StateDirectory=sentinel-server
+StateDirectoryMode=0700
+UMask=0077
+
+# Ограничения службы: только сеть и собственный каталог данных
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/sentinel-server
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

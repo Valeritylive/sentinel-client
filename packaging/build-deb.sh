@@ -52,3 +52,6 @@ EOF
 
 dpkg-deb --build --root-owner-group "$PACKAGE_ROOT" "$OUTPUT"
 printf 'Built %s\n' "$OUTPUT"
+
+# Серверная часть — отдельный пакет рядом с клиентским.
+sh "$SOURCE_DIR/packaging/build-server-deb.sh" "$(dirname -- "$OUTPUT")/sentinel_server_${VERSION}_all.deb"

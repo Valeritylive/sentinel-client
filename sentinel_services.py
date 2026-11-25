@@ -60,9 +60,17 @@ class ServicesMixin:
         self._refresh_alarm_panel()
         self._refresh_event_panel()
         self.check_all_devices(quiet=True)
+        try:
+            import sentinel_cloud_ui
+            sentinel_cloud_ui.restore_server_connection(self)
+        except Exception as exc:   # автоподключение не должно мешать запуску
+            self.notify(f"Сервер Sentinel: {exc}", error=True)
         return False
 
     def _stop_services(self):
+        link = self.__dict__.get("server_link")
+        if link is not None and link.stop is not None:
+            link.stop.set()
         for stop in getattr(self, "event_workers", {}).values():
             stop.set()
         self.event_workers = {}
