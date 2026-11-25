@@ -2495,7 +2495,7 @@ class SentinelWindow(Gtk.ApplicationWindow):
     def add_device(self):
         dialog = Gtk.Dialog(title="Добавить устройство", transient_for=self, modal=True)
         dialog.set_resizable(True)
-        dialog.set_default_size(*self._initial_window_size(470, 400))
+        dialog.set_default_size(*self._initial_window_size(520, 820))
         dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
         add_button = dialog.add_button("Проверить и добавить", Gtk.ResponseType.ACCEPT)
         add_button.add_css_class("suggested-action")
@@ -2546,6 +2546,10 @@ class SentinelWindow(Gtk.ApplicationWindow):
         fields["group"].set_hexpand(True)
         grid.attach(fields["group"], 1, extra_row + 2, 1, 1)
 
+        fields["manual"] = Gtk.CheckButton(
+            label="Не определять каналы автоматически (указать вручную)")
+        grid.attach(fields["manual"], 0, extra_row + 3, 2, 1)
+
         def update_mode(*_args):
             is_range = fields["mode"].get_selected() == 1
             end_label.set_visible(is_range)
@@ -2568,16 +2572,23 @@ class SentinelWindow(Gtk.ApplicationWindow):
         manual_row = len(fields)
         grid.attach(manual_channels, 0, manual_row, 2, 1)
         channel_status = make_label("", "muted")
+        channel_status.set_wrap(True)
+        channel_status.set_max_width_chars(48)
+        channel_status.set_width_chars(10)
+        channel_status.set_selectable(True)
         grid.attach(channel_status, 0, manual_row + 1, 2, 1)
 
         def update_channel_fields(*_args):
             is_hikvision = fields["protocol"].get_selected() == 0
-            manual_channels.set_visible(not is_hikvision)
+            manual = fields["manual"].get_active()
+            manual_channels.set_visible(not is_hikvision or manual)
+            fields["manual"].set_visible(is_hikvision)
             channel_status.set_text(
                 "Каналы будут определены автоматически; после подключения покажу их количество."
-                if is_hikvision else "Укажите диапазон каналов для пользовательского RTSP.")
+                if is_hikvision and not manual else "Укажите диапазон каналов.")
 
         fields["protocol"].connect("notify::selected", update_channel_fields)
+        fields["manual"].connect("toggled", update_channel_fields)
         update_channel_fields()
         dialog.get_content_area().append(grid)
 
@@ -2622,6 +2633,7 @@ class SentinelWindow(Gtk.ApplicationWindow):
                 "http_port": fields["http_port"].get_value_as_int(),
                 "rtsp_port": fields["rtsp_port"].get_value_as_int(),
                 "stream": "main" if fields["stream"].get_selected() == 0 else "sub",
+                "manual": fields["manual"].get_active() and protocol == "hikvision",
                 "first_channel": first_channel,
                 "manual_channel_count": channel_count,
             }
@@ -2649,7 +2661,7 @@ class SentinelWindow(Gtk.ApplicationWindow):
 
     def _probe_device_for_add(self, dialog, add_button, status, device, credentials):
         try:
-            if device["protocol"] == "hikvision":
+            if device["protocol"] == "hikvision" and not device.get("manual"):
                 channels = self._discover_hikvision_channels(device, credentials)
                 device.update(self._probe_device_extras(device, credentials))
             else:
@@ -2745,7 +2757,14 @@ class SentinelWindow(Gtk.ApplicationWindow):
                     f"ISAPI вернул HTTP {exc.code} при запросе списка каналов."
                 ) from exc
             except urllib.error.URLError as exc:
-                raise RuntimeError(f"Не удалось подключиться к устройству: {exc.reason}") from exc
+                reason = str(exc.reason)
+                hint = ""
+                if "timed out" in reason:
+                    hint = (f" Проверьте адрес и HTTP-порт ({device.get('http_port', 80)}): "
+                            "для доступа из интернета на роутере должен быть проброшен порт веб-интерфейса.")
+                elif "refused" in reason.lower():
+                    hint = " Порт закрыт: проверьте HTTP-порт устройства."
+                raise RuntimeError(f"Не удалось подключиться к устройству: {reason}.{hint}") from exc
 
             try:
                 channel_ids = parser(payload)
@@ -2770,8 +2789,10 @@ class SentinelWindow(Gtk.ApplicationWindow):
                 + f". Ответы остальных путей: {details}"
             )
         raise RuntimeError(
-            "HTTP-порт доступен, но каналы не удалось определить: устройство не поддержало найденные "
-            f"ISAPI-пути или вернуло пустой список. {details}")
+            "HTTP-порт отвечает, но ISAPI Hikvision там не найден (HTTP 404 на всех путях): похоже, на этом "
+            "порту работает не регистратор (роутер или другой веб-сервер) либо устройство без ISAPI. "
+            "Проверьте HTTP-порт или отметьте «Не определять каналы автоматически» и укажите каналы вручную. "
+            f"Подробности: {details}")
 
     def _store_probed_device(self, device, credentials, channels):
         """Записать устройство и его каналы; безопасно вызывать из рабочего потока."""

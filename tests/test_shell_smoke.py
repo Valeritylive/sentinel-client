@@ -164,3 +164,8 @@ class MainViewSmoke(ShellSmoke):
         self.assertIn("Новое имя", [d["name"] for d in self.win.devices])
         self.assertEqual(len(self.win.devices), 2)
         self.assertEqual(did, self.win.devices[0]["id"])
+
+
+class AddDialogSmoke(ShellSmoke):
+    def test_add_dialog_builds(self):
+        self.win.add_device()
