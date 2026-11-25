@@ -588,10 +588,10 @@ class SystemWindow(Gtk.Window):
             doors.set_value(int(device.get("door_count") or 1))
         if device.get("cloud_serial"):
             note = ("Устройство добавлено из Hik-Connect. Логин и пароль здесь — от самого регистратора, "
-                    "а не от аккаунта Hik-Connect.")
+                    "а не от аккаунта Hik-Connect. Без них и без прямого доступа видео идёт через облако.")
             if hikconnect.is_private_host(row["host"]):
-                note += (f" Адрес {row['host']} — локальная сеть объекта: видео будет только при подключении к ней "
-                         "(VPN) или после проброса RTSP-порта и смены адреса на внешний.")
+                note += (f" Адрес {row['host']} — локальная сеть объекта: напрямую он доступен через VPN или "
+                         "после проброса RTSP-порта и смены адреса на внешний.")
             form.attach(W.label(note, "muted", wrap=True), 0, 10, 2, 1)
         form.attach(W.label("Если часовой пояс устройства и ПК различаются, резервная запись на ПК недоступна — "
                             "синхронизируйте время.", "muted", wrap=True), 0, 9, 2, 1)
@@ -616,6 +616,9 @@ class SystemWindow(Gtk.Window):
                     self.owner.notify(f"Пароль не сохранён: {exc}", error=True)
                 for device_id_item in row["ids"]:
                     self.owner.session_credentials[device_id_item] = dict(credentials)
+            if device.get("cloud_serial"):
+                # Новый адрес или пароль: снова пробуем прямое подключение, облако — запасной путь.
+                storage.set_setting(f"cloud_video:{device['cloud_serial']}", "0")
             alarms.log_operation(self.owner.session.username, "Изменение устройства", row["host"])
             self.owner.refresh()
             self.owner.sync_event_subscriptions()

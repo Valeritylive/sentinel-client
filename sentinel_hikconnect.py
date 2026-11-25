@@ -641,6 +641,25 @@ def apply_cloud_status() -> int:
     return changed
 
 
+def account_for_serial(serial):
+    """Аккаунт Hik-Connect, к которому привязано устройство с этим серийным номером."""
+    with storage.database() as db:
+        row = db.execute("""SELECT a.* FROM cloud_devices c JOIN cloud_accounts a ON a.id=c.account_id
+            WHERE c.serial=? ORDER BY a.last_sync DESC LIMIT 1""", (serial,)).fetchone()
+    return dict(row) if row else None
+
+
+def cloud_session(serial, client_factory=None) -> dict:
+    """Действующая сессия аккаунта устройства для облачного видео (продлевается при необходимости)."""
+    account = account_for_serial(serial)
+    if not account:
+        raise HikConnectError("Устройство не найдено в аккаунтах Hik-Connect: синхронизируйте аккаунт")
+    before = (load_session(account["account"]) or {}).get("session_id")
+    client = restore_client(account, client_factory=client_factory)
+    if client.session_id != before:
+        save_session(account["account"], client, remember=bool(account["remember_password"]))
+    return client.state()
+
 # ==================================================================== подсказки при ошибке видео
 _CONNECT_HINTS = ("resource", "ресурс", "could not connect", "connection refused", "timed out", "timeout",
                   "no route", "unreachable", "не удалось открыть")
@@ -680,9 +699,9 @@ def stream_failure_hint(device, message) -> str:
     if any(h in text for h in _CONNECT_HINTS):
         if is_private_host(host):
             return (f"{name}: нет связи с {host}:{device.get('rtsp_port', 554)}. Это локальный адрес сети "
-                    "объекта из Hik-Connect, с этого компьютера он доступен только через VPN. Видео через "
-                    "облако Hik-Connect пока не поддерживается: подключитесь к сети объекта (VPN) или "
-                    "пробросьте RTSP-порт на роутере и укажите внешний адрес в «Система › Устройства».")
+                    "объекта из Hik-Connect, напрямую он доступен только через VPN или после проброса "
+                    "RTSP-порта (укажите внешний адрес в «Система › Устройства»). Без этого видео "
+                    "идёт через облако Hik-Connect.")
         return (f"{name}: нет связи с {host}:{device.get('rtsp_port', 554)}. Проверьте, что RTSP-порт "
                 "проброшен на роутере объекта, или подключитесь к его сети через VPN.")
     return ""

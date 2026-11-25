@@ -168,6 +168,14 @@ class AccountFlowTests(unittest.TestCase):
             engine.check_devices()
         self.assertEqual({d["status"] for d in storage.load_devices()}, {"offline"})
 
+    def test_cloud_session_for_imported_device(self):
+        hc.login_account("user@example.com", "secret", client_factory=self.factory)
+        state = hc.cloud_session("Q12345678", client_factory=self.factory)
+        self.assertEqual(state["session_id"], hc.load_session("user@example.com")["session_id"])
+        self.assertTrue(state["feature_code"])
+        with self.assertRaises(hc.HikConnectError):
+            hc.cloud_session("NOPE", client_factory=self.factory)
+
 class StreamHintTests(unittest.TestCase):
     def test_private_address_hint(self):
         device = {"cloud_serial": "FE0562391", "host_name": "Arami64", "host": "192.168.6.127", "rtsp_port": 554}

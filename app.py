@@ -45,7 +45,9 @@ except ImportError as exc:
     ) from exc
 
 import sentinel_devmgmt as devmgmt
+import sentinel_cloudstream as cloudstream
 import sentinel_hikconnect as hikconnect
+import sentinel_storage as storage
 import sentinel_widgets as W
 from sentinel_mainwin import MainWindowMixin
 from sentinel_services import ServicesMixin
@@ -2049,7 +2051,54 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             credentials = load_saved_credentials(device)
             if credentials:
                 self.session_credentials[device["id"]] = dict(credentials)
+        if not credentials and device.get("cloud_serial"):
+            # Устройство из Hik-Connect: без пароля регистратора видео идёт через облако.
+            credentials = {"username": "", "password": ""}
         return credentials
+
+    # ------------------------------------------------------------ облачное видео Hik-Connect
+    def _cloud_preferred(self, device):
+        return bool(device.get("cloud_serial")) and storage.get_setting(
+            f"cloud_video:{device['cloud_serial']}") == "1"
+
+    def _use_cloud_stream(self, device, credentials, playback, direct_uri):
+        if not device.get("cloud_serial") or playback is not None or direct_uri is not None:
+            return False
+        return not credentials.get("username") or self._cloud_preferred(device)
+
+    def _open_cloud_stream(self, device):
+        try:
+            session_state = hikconnect.cloud_session(device["cloud_serial"])
+        except hikconnect.HikConnectError as exc:
+            raise RuntimeError(f"{device['name']}: облачное видео недоступно: {exc}") from exc
+        try:
+            return cloudstream.CloudStreamProcess(cloudstream.build_request(device, session_state))
+        except cloudstream.CloudStreamError as exc:
+            if exc.code == "runtime":
+                self._install_cloud_runtime()
+                raise RuntimeError("Устанавливается модуль облачного видео Hik-Connect (один раз, около минуты). "
+                                   "Откройте камеру снова, когда появится сообщение об установке.") from exc
+            raise RuntimeError(f"{device['name']}: {exc}") from exc
+
+    def _install_cloud_runtime(self):
+        if getattr(self, "_cloud_install_running", False):
+            return
+        self._cloud_install_running = True
+
+        def work():
+            try:
+                cloudstream.install_runtime()
+                message = "Модуль облачного видео Hik-Connect установлен. Откройте камеру снова."
+            except Exception as exc:
+                message = f"Не удалось установить модуль облачного видео: {exc}"
+            GLib.idle_add(finish, message)
+
+        def finish(message):
+            self._cloud_install_running = False
+            self.notify(message)
+            return GLib.SOURCE_REMOVE
+
+        threading.Thread(target=work, daemon=True).start()
 
     def start_all_channels(self, *_args):
         self.devices = load_devices()
@@ -2102,6 +2151,8 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
                         self.session_credentials[device["id"]] = dict(credentials)
             except (OSError, RuntimeError, subprocess.TimeoutExpired):
                 credentials = None
+            if not credentials and device.get("cloud_serial"):
+                credentials = {"username": "", "password": ""}     # видео через облако Hik-Connect
             if credentials:
                 start_camera(slot_index, device, credentials)
                 progress["index"] += 1
@@ -3103,22 +3154,30 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             preview_device["stream"] = stream_override
         elif device["protocol"] == "hikvision" and not playback and not direct_uri:
             preview_device["stream"] = self._desired_stream(slot_index)
-        uri = direct_uri or self._stream_url(preview_device, credentials, playback)
+        cloud = None
+        if self._use_cloud_stream(preview_device, credentials, playback, direct_uri):
+            cloud = self._open_cloud_stream(preview_device)
+            uri = cloud.uri
+        else:
+            uri = direct_uri or self._stream_url(preview_device, credentials, playback)
         sink = Gst.ElementFactory.make("appsink", f"sentinel-video-{slot_index}")
         pipeline = Gst.ElementFactory.make("playbin", f"sentinel-player-{slot_index}")
         if not sink or not pipeline:
+            if cloud:
+                cloud.stop()
             raise RuntimeError("GStreamer playbin/appsink недоступен. Установите GStreamer base/good plugins.")
         sink.set_property("emit-signals", True)
         sink.set_property("max-buffers", 1)
         sink.set_property("drop", True)
-        sink.set_property("sync", True)
+        # Облако присылает кадры пачками с метками времени FFmpeg: показываем по мере прихода.
+        sink.set_property("sync", cloud is None)
         sink.set_property("caps", Gst.Caps.from_string("video/x-raw,format=RGBA"))
         state = {"pipeline": pipeline, "sink": sink, "device": preview_device,
                  "base_device": base_device, "configured_stream": base_device.get("stream", "main"),
                  "playback": playback is not None or direct_uri is not None,
                  "playback_interval": playback,
                  "credentials": dict(credentials),
-                 "uri": uri, "slot": slot_index, "recording": None, "last_frame_time": 0,
+                 "uri": uri, "slot": slot_index, "recording": None, "last_frame_time": 0, "cloud": cloud,
                  "digital_zoom": 1.0, "digital_x": 0.5, "digital_y": 0.5,
                  "frame_interval": 0.25 if (
                      getattr(self, "silent_stream_errors", False)
@@ -3135,8 +3194,9 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         self.streams[slot_index] = state
         self.video_slots[slot_index]["device"] = preview_device
         mode = "ARCHIVE" if state["playback"] else "LIVE"
+        source = "Hik-Connect" if cloud else preview_device["host"]
         self.video_slots[slot_index]["caption"].set_text(
-            f"● {mode}   {preview_device['name']}  ·  {preview_device['host']} CH {preview_device['channel']}")
+            f"● {mode}   {preview_device['name']}  ·  {source} CH {preview_device['channel']}")
         self.video_slots[slot_index]["placeholder"].set_visible(False)
         self._select_slot(slot_index)
         if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
@@ -3215,6 +3275,8 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             slot = state["slot"]
             if self.streams.get(slot) is state:
                 GLib.idle_add(self._stream_failed, slot, str(error), state)
+        elif state.get("cloud") and self.streams.get(state["slot"]) is state:
+            GLib.idle_add(self._stream_failed, state["slot"], "облако закрыло поток", state)
         else:
             GLib.idle_add(self._stop_stream_if_current, state)
 
@@ -3227,7 +3289,34 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         if state is not None and self.streams.get(slot) is not state:
             return GLib.SOURCE_REMOVE  # окно уже занято другим потоком
         device = (state or {}).get("base_device") or (state or {}).get("device")
+        cloud = (state or {}).get("cloud")
+        if cloud is not None:
+            error = cloud.error()
+            self._stop_stream(slot)
+            text = f"{(device or {}).get('name', '')}: облачное видео недоступно — {error or message}"
+            if error is not None and error.code == "runtime":
+                self._install_cloud_runtime()
+            if getattr(self, "silent_stream_errors", False):
+                if slot < len(self.video_slots):
+                    self.video_slots[slot]["placeholder"].set_text(f"{slot + 1}\n\nПоток недоступен")
+            else:
+                self.notify(text, error=True)
+            return GLib.SOURCE_REMOVE
         hint = hikconnect.stream_failure_hint(device, message)
+        if (hint and device and not state.get("playback") and hikconnect.is_private_host(device.get("host"))
+                and not self._cloud_preferred(device)):
+            # Прямой адрес из Hik-Connect недоступен: дальше этот регистратор смотрим через облако.
+            storage.set_setting(f"cloud_video:{device['cloud_serial']}", "1")
+            credentials = state.get("credentials") or {}
+            stream = state.get("device", {}).get("stream")
+            self._stop_stream(slot)
+            try:
+                self._start_preview(slot, device, credentials, stream_override=stream)
+                self.notify(f"{device.get('host_name') or device['name']}: прямого доступа нет, "
+                            "видео идёт через облако Hik-Connect")
+                return GLib.SOURCE_REMOVE
+            except Exception as exc:
+                hint = f"{hint}\n{exc}"
         self._stop_stream(slot)
         if hint and not getattr(self, "silent_stream_errors", False):
             self.notify(hint, error=True)
@@ -3251,6 +3340,8 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             self._set_record_button_label("● Запись")
         state["pipeline"].set_state(Gst.State.NULL)
         state["pipeline"].get_bus().remove_signal_watch()
+        if state.get("cloud") is not None:
+            state["cloud"].stop()
         if slot < len(self.video_slots):
             item = self.video_slots[slot]
             item["picture"].set_paintable(None)
@@ -3306,6 +3397,9 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             state["recording"] = None
             self._set_record_button_label("● Запись")
             self.notify("Запись остановлена")
+            return
+        if state.get("cloud") is not None:
+            self.notify("Запись облачного потока Hik-Connect пока не поддерживается")
             return
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
