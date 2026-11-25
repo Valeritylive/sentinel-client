@@ -130,6 +130,31 @@ class RequestTests(unittest.TestCase):
             with self.assertRaises(cs.CloudStreamError):
                 cs.CloudStreamProcess({})
 
+    def test_runtime_python_bundled_libs(self):
+        with patch.dict(os.environ, {cs.RUNTIME_ENV: ""}), tempfile.TemporaryDirectory() as temp, \
+                patch.object(cs, "runtime_dir", lambda: Path(temp) / "venv"), \
+                patch.object(cs, "BUNDLED_LIBS", Path(temp)):
+            expected = sys.executable if sys.version_info[:2] >= cs.MIN_PYTHON else None
+            self.assertEqual(cs.runtime_python(), expected)
+
+    def test_install_runtime_needs_new_python(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(cs, "runtime_dir", lambda: Path(temp) / "rt"), \
+                patch.object(cs, "find_python", lambda: None):
+            with self.assertRaises(RuntimeError) as ctx:
+                cs.install_runtime()
+            self.assertIn("3.12", str(ctx.exception))
+
+    def test_packaging_pins_match_runtime(self):
+        root = Path(__file__).resolve().parent.parent
+        for name in ("packaging/bundle-cloud-python.sh", "packaging/flatpak/io.sentinel.VideoClient.yml"):
+            text = (root / name).read_text(encoding="utf-8")
+            for package in cs.RUNTIME_PACKAGES:
+                self.assertIn(package, text, name)
+
+    def test_find_python_version_check(self):
+        self.assertEqual(cs._python_version(sys.executable), tuple(sys.version_info[:2]))
+        self.assertIsNone(cs._python_version("/nonexistent/python"))
+
 
 class ProcessTests(unittest.TestCase):
     def test_process_stream_and_error(self):

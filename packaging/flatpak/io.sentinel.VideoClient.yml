@@ -1,7 +1,8 @@
 # Flatpak-манифест Sentinel.
 # Платформа GNOME уже содержит GTK 4, GStreamer (с gst-libav), PyGObject, pycairo и WebKitGTK 6.
 # Внутрь пакета дополнительно собираются secret-tool (хранение паролей устройств)
-# и минимальный FFmpeg (запись, экспорт и резервная запись на ПК без перекодирования).
+# и минимальный FFmpeg (запись, экспорт, резервная запись на ПК и облачное видео без перекодирования),
+# а также библиотеки облачного видео Hik-Connect (hikcloudstream, pyezvizapi).
 #
 # Локальная сборка:
 #   flatpak install flathub org.gnome.Platform//47 org.gnome.Sdk//47
@@ -51,8 +52,8 @@ modules:
       - --disable-autodetect
       - --enable-network
       - --enable-protocol=file,pipe,rtsp,rtp,tcp,udp
-      - --enable-demuxer=concat,rtsp,rtp,sdp,matroska,mov
-      - --enable-muxer=matroska,segment,mp4
+      - --enable-demuxer=concat,rtsp,rtp,sdp,matroska,mov,h264,hevc,mpegps
+      - --enable-muxer=matroska,segment,mp4,mpegts
       - --enable-parser=h264,hevc,aac
       - --enable-decoder=h264,hevc,aac,pcm_alaw,pcm_mulaw
       - --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc
@@ -63,6 +64,17 @@ modules:
       - type: git
         url: https://github.com/FFmpeg/FFmpeg.git
         tag: n7.1
+
+  # Библиотеки облачного видео Hik-Connect (Python 3.12 платформы GNOME 47 подходит).
+  # Версии должны совпадать с RUNTIME_PACKAGES в sentinel_cloudstream.py (проверяется тестом).
+  - name: cloud-libs
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
+    build-commands:
+      - pip3 install --no-cache-dir --disable-pip-version-check --target /app/lib/sentinel/cloud-libs hikcloudstream==0.1.4 pyezvizapi==1.0.5.0
+      - python3 -I -c "import sys; sys.path.append('/app/lib/sentinel/cloud-libs'); import hikcloudstream.stream.session, pyezvizapi.stream"
 
   - name: sentinel
     buildsystem: simple
