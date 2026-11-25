@@ -11,8 +11,13 @@ from pathlib import Path
 
 APP_ID = "io.sentinel.VideoClient"
 SECRET_LABEL = "Sentinel camera credentials"
-DATA = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "sentinel"
+# SENTINEL_DATA_DIR позволяет серверу (служба systemd) держать свою базу отдельно от клиента.
+DATA = (Path(os.environ["SENTINEL_DATA_DIR"]).expanduser() if os.environ.get("SENTINEL_DATA_DIR")
+        else Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "sentinel")
 DB_PATH = DATA / "devices.sqlite3"
+# "secret-service" (по умолчанию) или "file" — для сервера без D-Bus-сеанса пользователя.
+CREDENTIAL_STORE_ENV = "SENTINEL_CREDENTIAL_STORE"
+_file_secret_lock = threading.Lock()
 
 _initialized: set[str] = set()
 _init_lock = threading.Lock()
@@ -212,6 +217,27 @@ def _migrate_hcl_model(db: sqlite3.Connection) -> None:
     db.execute("""CREATE TABLE IF NOT EXISTS holidays (
         id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
         start_date TEXT NOT NULL, end_date TEXT NOT NULL)""")
+    _migrate_cloud_model(db)
+
+
+def _migrate_cloud_model(db: sqlite3.Connection) -> None:
+    """Облачные аккаунты (Hik-Connect) и снимок привязанных к ним устройств."""
+    db.execute("""CREATE TABLE IF NOT EXISTS cloud_accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL DEFAULT 'hikconnect',
+        account TEXT NOT NULL, api_url TEXT NOT NULL DEFAULT '', remember_password INTEGER NOT NULL DEFAULT 0,
+        auto_sync INTEGER NOT NULL DEFAULT 1, last_sync TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(provider, account))""")
+    db.execute("""CREATE TABLE IF NOT EXISTS cloud_devices (
+        account_id INTEGER NOT NULL REFERENCES cloud_accounts(id) ON DELETE CASCADE,
+        serial TEXT NOT NULL, full_serial TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL DEFAULT '', firmware TEXT NOT NULL DEFAULT '', online INTEGER NOT NULL DEFAULT 0,
+        local_ip TEXT NOT NULL DEFAULT '', wan_ip TEXT NOT NULL DEFAULT '', domain TEXT NOT NULL DEFAULT '',
+        http_port INTEGER NOT NULL DEFAULT 80, rtsp_port INTEGER NOT NULL DEFAULT 554,
+        sdk_port INTEGER NOT NULL DEFAULT 8000, wan_http_port INTEGER NOT NULL DEFAULT 0,
+        wan_rtsp_port INTEGER NOT NULL DEFAULT 0, wan_sdk_port INTEGER NOT NULL DEFAULT 0,
+        category TEXT NOT NULL DEFAULT 'video', cameras TEXT NOT NULL DEFAULT '[]',
+        synced_at TEXT NOT NULL DEFAULT '', PRIMARY KEY(account_id, serial))""")
+    _add_column(db, "devices", "cloud_serial", "TEXT NOT NULL DEFAULT ''")
 
 
 def get_setting(key: str, default: str | None = None) -> str | None:
@@ -338,7 +364,52 @@ def delete_custom_division(name: str) -> None:
         db.execute("DELETE FROM custom_divisions WHERE name=?", (name,))
 
 
+def credential_backend() -> str:
+    return "file" if os.environ.get(CREDENTIAL_STORE_ENV, "").strip().lower() == "file" else "secret-service"
+
+
+def _secret_key(device) -> str:
+    return f"{device['host']}|{int(device.get('http_port', 80))}"
+
+
+def _file_secret(action: str, device, secret: str | None = None) -> str | None:
+    """Файловое хранилище секретов (0600) для службы без Secret Service.
+
+    Файл не шифруется: защищён только правами доступа учётной записи службы,
+    как обычные конфигурационные файлы демонов. Включается явно переменной
+    SENTINEL_CREDENTIAL_STORE=file.
+    """
+    path = DATA / "secrets.json"
+    with _file_secret_lock:
+        DATA.mkdir(parents=True, exist_ok=True)
+        try:
+            items = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            if not isinstance(items, dict):
+                raise ValueError
+        except (OSError, ValueError) as exc:
+            raise CredentialStoreError(f"Файл секретов повреждён или недоступен: {path}") from exc
+        key = _secret_key(device)
+        if action == "lookup":
+            return items.get(key)
+        if action == "store":
+            items[key] = secret
+        elif action == "clear":
+            if items.pop(key, None) is None:
+                return None
+        else:
+            raise CredentialStoreError(f"Неизвестная операция: {action}")
+        temp = path.with_suffix(".tmp")
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(items, handle, ensure_ascii=False)
+        os.replace(temp, path)
+        os.chmod(path, 0o600)
+    return None
+
+
 def _secret_tool(action: str, device, secret: str | None = None) -> str | None:
+    if credential_backend() == "file":
+        return _file_secret(action, device, secret)
     executable = shutil.which("secret-tool")
     if not executable:
         raise CredentialStoreError("Установите libsecret-tools для системного хранения паролей")
@@ -464,3 +535,24 @@ def delete_saved_credentials(device) -> None:
             "DELETE FROM device_credentials WHERE host=? AND http_port=?",
             (device["host"], int(device.get("http_port", 80))),
         )
+
+
+# ------------------------------------------------------------------ произвольные секреты
+def save_json_secret(namespace: str, name: str, value: dict) -> None:
+    """Секрет не-устройства (облачный аккаунт, SMTP и т.п.) в том же хранилище."""
+    _secret_tool("store", {"host": f"{namespace}:{name}", "http_port": 0}, json.dumps(value, ensure_ascii=False))
+
+
+def load_json_secret(namespace: str, name: str):
+    payload = _secret_tool("lookup", {"host": f"{namespace}:{name}", "http_port": 0})
+    if payload is None:
+        return None
+    try:
+        value = json.loads(payload)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise CredentialStoreError("В хранилище секретов найдены некорректные данные") from exc
+    return value if isinstance(value, dict) else None
+
+
+def delete_json_secret(namespace: str, name: str) -> None:
+    _secret_tool("clear", {"host": f"{namespace}:{name}", "http_port": 0})

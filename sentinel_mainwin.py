@@ -188,9 +188,12 @@ class MainWindowMixin:
         W.margins(box, 8)
         self.user_title = W.label("admin", "section-title")
         box.append(self.user_title)
-        box.append(W.label("Локальный клиент Sentinel", "muted"))
+        self.user_mode_label = W.label("Локальный клиент Sentinel", "muted")
+        box.append(self.user_mode_label)
         box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-        for title, callback in (("Лицензии", self.show_license_info),
+        for title, callback in (("Сервер Sentinel…", self.open_server_dialog),
+                                ("Hik-Connect (облачный аккаунт)…", self.open_hikconnect),
+                                ("Лицензии", self.show_license_info),
                                 ("Резервное копирование и восстановление", self.backup_restore_dialog),
                                 ("Локальная конфигурация", self.open_local_settings),
                                 ("Сменить пароль", self.change_password_dialog),
@@ -716,6 +719,16 @@ class MainWindowMixin:
 
     def _activate_tab(self, key):  # совместимость со старым API вкладок модулей
         self._show_module(key)
+
+    def open_server_dialog(self):
+        if not self.session.can("devices"):
+            self.notify("Нет прав на управление устройствами", error=True)
+            return
+        import sentinel_cloud_ui
+        sentinel_cloud_ui.open_server_dialog(self)
+
+    def open_hikconnect(self):
+        self.open_system("devices", "hikconnect")
 
     def open_system(self, section=None, sub=None):
         from sentinel_system import SystemWindow

@@ -41,7 +41,7 @@ jobs:
 
       - name: Validate Debian package metadata
         run: |
-          dpkg-deb --info sentinel_*.deb
+          for deb in sentinel_*.deb; do dpkg-deb --info "$deb"; done
           sed 's|@APP_PATH@|/usr/lib/sentinel/app.py|g' io.sentinel.VideoClient.desktop.in > /tmp/io.sentinel.VideoClient.desktop
           desktop-file-validate /tmp/io.sentinel.VideoClient.desktop
           mkdir -p /tmp/sentinel-appimage

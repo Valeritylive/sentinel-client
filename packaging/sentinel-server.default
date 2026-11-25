@@ -1,0 +1,15 @@
+# Настройки службы sentinel-server (systemd читает этот файл при запуске).
+#
+# Адрес и порт. 127.0.0.1 — только этот компьютер; 0.0.0.0 — вся сеть (нужен TLS).
+SENTINEL_HOST=127.0.0.1
+SENTINEL_PORT=8765
+
+# TLS-сертификат и ключ (PEM). Файлы должны быть доступны пользователю sentinel.
+#SENTINEL_TLS_CERT=/etc/sentinel-server/cert.pem
+#SENTINEL_TLS_KEY=/etc/sentinel-server/key.pem
+
+# Разрешить HTTP без TLS на сетевом интерфейсе (только для доверенной сети).
+#SENTINEL_ALLOW_PLAIN_HTTP=1
+
+# Дополнительные параметры: --no-events, --no-recording, --status-interval 300, --cloud-interval 600, -v
+SENTINEL_OPTS=
