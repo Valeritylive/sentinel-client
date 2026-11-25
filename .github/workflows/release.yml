@@ -65,18 +65,34 @@ jobs:
 
   flatpak:
     runs-on: ubuntu-24.04
-    container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-47
-      options: --privileged
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Flatpak bundle
-        uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
+      - name: Install flatpak-builder and GNOME 47 SDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y --noninteractive flathub org.gnome.Platform//47 org.gnome.Sdk//47
+
+      - name: Cache flatpak-builder downloads
+        uses: actions/cache@v4
         with:
-          bundle: Sentinel.flatpak
-          manifest-path: packaging/flatpak/io.sentinel.VideoClient.yml
-          cache-key: flatpak-builder-${{ hashFiles('packaging/flatpak/io.sentinel.VideoClient.yml') }}
+          path: .flatpak-builder
+          key: flatpak-builder-${{ hashFiles('packaging/flatpak/io.sentinel.VideoClient.yml') }}
+
+      - name: Build Flatpak bundle
+        run: |
+          flatpak-builder --user --force-clean --disable-rofiles-fuse --repo=repo build-dir \
+            packaging/flatpak/io.sentinel.VideoClient.yml
+          flatpak build-bundle repo Sentinel.flatpak io.sentinel.VideoClient \
+            --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - name: Upload Flatpak bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sentinel.flatpak
+          path: Sentinel.flatpak
 
   publish-flatpak:
     needs: [build, flatpak]
