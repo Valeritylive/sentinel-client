@@ -102,6 +102,9 @@ class Widget(Any):
 
     def get_active(self): return self._state["active"]
 
+    def set_visible(self, value): self._state["visible_flag"] = bool(value)
+    def get_visible(self): return self._state.get("visible_flag", True)
+
 
 class Stack(Widget):
     def __init__(self, *a, **k):

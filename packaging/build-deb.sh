@@ -20,11 +20,9 @@ mkdir -p \
     "$PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps"
 
 install -m 0644 "$SOURCE_DIR/app.py" "$PACKAGE_ROOT/usr/lib/sentinel/app.py"
-install -m 0644 "$SOURCE_DIR/sentinel_storage.py" "$PACKAGE_ROOT/usr/lib/sentinel/sentinel_storage.py"
-install -m 0644 "$SOURCE_DIR/sentinel_protocols.py" "$PACKAGE_ROOT/usr/lib/sentinel/sentinel_protocols.py"
-install -m 0644 "$SOURCE_DIR/sentinel_layouts.py" "$PACKAGE_ROOT/usr/lib/sentinel/sentinel_layouts.py"
-install -m 0644 "$SOURCE_DIR/sentinel_shell.py" "$PACKAGE_ROOT/usr/lib/sentinel/sentinel_shell.py"
-install -m 0644 "$SOURCE_DIR/sentinel_devmgmt.py" "$PACKAGE_ROOT/usr/lib/sentinel/sentinel_devmgmt.py"
+for module in "$SOURCE_DIR"/sentinel_*.py; do
+    install -m 0644 "$module" "$PACKAGE_ROOT/usr/lib/sentinel/$(basename "$module")"
+done
 install -m 0644 "$SOURCE_DIR/VERSION" "$PACKAGE_ROOT/usr/lib/sentinel/VERSION"
 install -m 0644 "$SOURCE_DIR/io.sentinel.VideoClient.svg" \
     "$PACKAGE_ROOT/usr/share/icons/hicolor/scalable/apps/io.sentinel.VideoClient.svg"
@@ -47,8 +45,9 @@ Architecture: ${ARCH}
 Maintainer: Sentinel contributors
 Description: GTK video surveillance client
  Sentinel is a local Linux desktop client for supported video surveillance devices.
-Depends: python3, python3-gi, gir1.2-gtk-4.0, gir1.2-gstreamer-1.0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-libav, libsecret-tools
+Depends: python3, python3-gi, python3-gi-cairo, gir1.2-gtk-4.0, gir1.2-gstreamer-1.0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-libav, libsecret-tools
 Recommends: ffmpeg
+Suggests: gir1.2-webkit-6.0
 EOF
 
 dpkg-deb --build --root-owner-group "$PACKAGE_ROOT" "$OUTPUT"

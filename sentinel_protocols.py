@@ -191,13 +191,16 @@ class FfmpegJob:
 
     STOP_GRACE_SECONDS = 10
 
-    def __init__(self, ffmpeg: str, uri: str, output: str, on_error=None):
+    def __init__(self, ffmpeg: str, uri: str, output: str, on_error=None, command=None):
+        """``command(list_path) -> argv`` заменяет стандартную команду копирования
+        (например, сегментированная резервная запись); URL всё равно остаётся вне argv."""
         self._on_error = on_error
         self._stopping = False
         self._list_path = write_rtsp_concat_list(uri)
         try:
+            argv = command(self._list_path) if command else ffmpeg_copy_command(ffmpeg, self._list_path, str(output))
             self.process = subprocess.Popen(
-                ffmpeg_copy_command(ffmpeg, self._list_path, str(output)),
+                argv,
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE, start_new_session=True)
         except BaseException:
