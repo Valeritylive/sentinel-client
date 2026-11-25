@@ -24,7 +24,7 @@ python3 app.py
 
 ```sh
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-flatpak install --user ./Sentinel-0.3.2-x86_64.flatpak
+flatpak install --user ./Sentinel-0.5.0-x86_64.flatpak
 flatpak run io.sentinel.VideoClient
 ```
 
@@ -102,9 +102,14 @@ sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-gstreamer-1.0 \
 
 Если регистратор из Hik-Connect недоступен напрямую (облако сообщает локальный адрес чужой сети, порты не проброшены) или для него не введён пароль устройства, живое видео идёт через облачный ретранслятор VTM — как в мобильном приложении. Пароль регистратора для этого не нужен, используется сессия аккаунта Hik-Connect. После первой неудачи прямого подключения Sentinel запоминает, что этот регистратор смотрится через облако; изменение адреса или пароля в «Система › Устройства» снова включает прямой путь.
 
-Протокол VTM реализован в открытых библиотеках [pyezvizapi](https://pypi.org/project/pyezvizapi/) и [hikcloudstream](https://pypi.org/project/hikcloudstream/) (Apache-2.0). При первом облачном просмотре Sentinel сам ставит их в отдельное окружение `~/.local/share/sentinel/cloud-runtime` (нужен интернет и пакет `python3-venv`); вручную: `python3 sentinel_cloudstream.py --install`. Другой Python можно указать в `SENTINEL_CLOUD_PYTHON`. Нужен FFmpeg. Поток H.264/H.265 разбирается из RTP самим Sentinel и передаётся в GStreamer как MPEG-TS.
+Протокол VTM реализован в открытых библиотеках [pyezvizapi](https://pypi.org/project/pyezvizapi/) и [hikcloudstream](https://pypi.org/project/hikcloudstream/) (Apache-2.0); им нужен Python 3.12 или новее. Нужен FFmpeg. Поток H.264/H.265 разбирается из RTP самим Sentinel и передаётся в GStreamer как MPEG-TS.
 
-Ограничения: архив и запись на ПК облачного потока пока не поддерживаются; потоки с включённым шифрованием видео (код проверки устройства) пока не открываются; у облака два потока (основной и дополнительный), третий открывается как дополнительный. Каждое окно — отдельное соединение с облаком.
+- **Flatpak и AppImage** (с версии 0.5.0) уже содержат эти библиотеки (в AppImage — вместе с отдельным Python 3.12), облачное видео работает сразу.
+- **.deb и запуск из исходников**: при первом облачном просмотре Sentinel сам ставит библиотеки в отдельное окружение `~/.local/share/sentinel/cloud-runtime` (нужен интернет, Python 3.12+ в системе и модуль venv — пакет `python3-venv`; на Ubuntu 22.04 Python 3.12 по умолчанию нет, его можно поставить отдельно как `python3.12` и `python3.12-venv`). Вручную: `python3 sentinel_cloudstream.py --install`. Готовый Python с библиотеками можно указать в `SENTINEL_CLOUD_PYTHON`.
+
+Если на регистраторе включено шифрование видео, Sentinel спросит **код проверки устройства** (6 заглавных букв на наклейке или в настройках шифрования); код хранится в Secret Service.
+
+Ограничения: архив и запись на ПК облачного потока пока не поддерживаются; у облака два потока (основной и дополнительный), третий открывается как дополнительный. Каждое окно — отдельное соединение с облаком.
 
 ## Sentinel Server — серверная часть (с версии 0.4.0)
 
@@ -126,7 +131,7 @@ python3 sentinel_server.py hikconnect-devices
 Пакет `sentinel_server_<версия>_all.deb` ставит службу systemd от отдельного пользователя `sentinel` (база в `/var/lib/sentinel-server`, настройки в `/etc/default/sentinel-server`):
 
 ```sh
-sudo apt install ./sentinel_server_0.4.0_all.deb
+sudo apt install ./sentinel_server_0.5.0_all.deb
 sudo sentinel-server create-admin
 sudo systemctl enable --now sentinel-server
 ```

@@ -27,6 +27,9 @@ from pathlib import Path
 
 RUNTIME_ENV = "SENTINEL_CLOUD_PYTHON"
 RUNTIME_PACKAGES = ("hikcloudstream==0.1.4", "pyezvizapi==1.0.5.0")
+MIN_PYTHON = (3, 12)       # hikcloudstream и pyezvizapi требуют Python 3.12+
+# Пакеты (AppImage, Flatpak) кладут библиотеки рядом с модулем, чтобы облако работало без установки.
+BUNDLED_LIBS = Path(__file__).resolve().parent / "cloud-libs"
 ERROR_PREFIX = "SENTINEL_CLOUD_ERROR "
 STREAM_MAIN, STREAM_SUB = 1, 2
 
@@ -49,13 +52,46 @@ def runtime_dir() -> Path:
     return Path(storage.DATA) / "cloud-runtime"
 
 
+def _python_version(python) -> tuple[int, int] | None:
+    try:
+        result = subprocess.run([python, "-I", "-c", "import sys; print(*sys.version_info[:2])"],
+                                capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    try:
+        major, minor = result.stdout.split()
+        return int(major), int(minor)
+    except ValueError:
+        return None
+
+
+def find_python() -> str | None:
+    """Python 3.12+ для окружения облачного видео: текущий или один из установленных в системе."""
+    if sys.version_info[:2] >= MIN_PYTHON and not os.environ.get("APPIMAGE"):
+        return sys.executable
+    seen = set()
+    for name in ("python3", "python3.14", "python3.13", "python3.12"):
+        path = shutil.which(name)
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        version = _python_version(path)
+        if version and version >= MIN_PYTHON:
+            return path
+    return None
+
+
 def runtime_python() -> str | None:
     """Python окружения с библиотеками облачного потока, если оно установлено."""
     configured = os.environ.get(RUNTIME_ENV)
     if configured:
         return configured if Path(configured).exists() else None
     candidate = runtime_dir() / "bin" / "python"
-    return str(candidate) if candidate.exists() else None
+    if candidate.exists():
+        return str(candidate)
+    if BUNDLED_LIBS.is_dir() and sys.version_info[:2] >= MIN_PYTHON:
+        return sys.executable
+    return None
 
 
 def install_runtime(log=None) -> str:
@@ -63,16 +99,28 @@ def install_runtime(log=None) -> str:
     target = runtime_dir()
     target.parent.mkdir(parents=True, exist_ok=True)
     python = target / "bin" / "python"
+    if python.exists() and (_python_version(str(python)) or (0, 0)) < MIN_PYTHON:
+        shutil.rmtree(target, ignore_errors=True)     # окружение от старого Python: библиотеки туда не встанут
     steps = []
     if not python.exists():
-        steps.append([sys.executable, "-m", "venv", str(target)])
-    steps.append([str(python), "-m", "pip", "install", "--disable-pip-version-check", "-q", *RUNTIME_PACKAGES])
+        base = find_python()
+        if not base:
+            raise RuntimeError("для облачного видео нужен Python 3.12 или новее (пакеты python3.12 и python3.12-venv); "
+                               "путь к нему можно указать в SENTINEL_CLOUD_PYTHON")
+        steps.append([base, "-I", "-m", "venv", str(target)])
+    steps.append([str(python), "-I", "-m", "pip", "install", "--disable-pip-version-check", "-q", *RUNTIME_PACKAGES])
     for command in steps:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=900)
         if log:
-            log(" ".join(command[:4]) + " …")
+            log(" ".join(command[:5]) + " …")
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=900)
+        except OSError as exc:
+            raise RuntimeError(str(exc)) from exc
         if result.returncode != 0:
-            raise RuntimeError((result.stderr or result.stdout).strip()[-600:] or "установка не удалась")
+            detail = (result.stderr or result.stdout).strip()
+            if "ensurepip" in detail or "No module named pip" in detail:
+                detail = "не хватает модуля venv/pip: установите пакет python3-venv (или python3.12-venv)"
+            raise RuntimeError(detail[-600:] or "установка не удалась")
     return str(python)
 
 
@@ -369,6 +417,8 @@ def helper_main() -> int:      # pragma: no cover - нужен реальный 
         request = json.loads(sys.stdin.read())
     except json.JSONDecodeError as exc:
         return _fail("failed", exc)
+    if BUNDLED_LIBS.is_dir() and str(BUNDLED_LIBS) not in sys.path:
+        sys.path.append(str(BUNDLED_LIBS))      # после site-packages: своё окружение важнее встроенного
     try:
         import hikcloudstream.stream.session as hc_session
         from hikcloudstream import Camera, ClientConfig, HikConnectClient
