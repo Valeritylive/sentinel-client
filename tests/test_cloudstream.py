@@ -54,6 +54,16 @@ class RtpTests(unittest.TestCase):
         self.assertEqual(out, sc + b"\x67SPS" + sc + b"\x65IDR1IDR2" + sc + b"\x68P" + sc + b"\x06S")
 
 
+class PsTests(unittest.TestCase):
+    def test_mpeg_ps_in_rtp_is_passed_through(self):
+        dep = cs.RtpDepacketizer()
+        ps = b"\x00\x00\x01\xba" + b"\x44" * 10
+        self.assertEqual(dep.feed(rtp(ps)), ps)
+        self.assertEqual(dep.codec, cs.MPEG_PS)
+        self.assertEqual(dep.feed(rtp(b"\x00\x00\x01\xe0rest")), b"\x00\x00\x01\xe0rest")
+        self.assertEqual(dep.feed(rtp(b"meta", pt=112)), b"")
+
+
 class RequestTests(unittest.TestCase):
     def test_build_request_and_stream_kind(self):
         device = {"cloud_serial": "FH2381693", "channel": 3, "stream": "sub"}

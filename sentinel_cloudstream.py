@@ -36,7 +36,7 @@ ERROR_TITLES = {
     "not_found": "облако не нашло этот канал (камера не в сети или канал не подключён)",
     "negotiation": "облачный ретранслятор отказал в потоке",
     "encrypted": "видео на регистраторе зашифровано, облачный просмотр таких потоков пока не поддерживается",
-    "no_video": "облако не прислало видео",
+    "no_video": "облако не прислало видео в понятном формате",
     "ffmpeg": "для облачного видео нужен FFmpeg",
     "failed": "ошибка облачного потока",
 }
@@ -102,7 +102,8 @@ class CloudStreamError(RuntimeError):
         self.code = code
         self.detail = detail
         title = ERROR_TITLES.get(code, ERROR_TITLES["failed"])
-        super().__init__(f"{title}" + (f" ({detail})" if detail and code in ("failed", "negotiation") else ""))
+        super().__init__(f"{title}" + (f" ({detail})" if detail and code in ("failed", "negotiation", "no_video")
+                                       else ""))
 
 
 def parse_error(stderr_text) -> CloudStreamError | None:
@@ -165,7 +166,8 @@ class CloudStreamProcess:
 
 
 # ==================================================================== разбор RTP (без зависимостей)
-H264, H265 = "h264", "hevc"
+H264, H265, MPEG_PS = "h264", "hevc", "mpeg"
+NO_VIDEO_TIMEOUT = 25      # секунд без видео после начала потока — сообщить и выйти
 _SC = b"\x00\x00\x00\x01"
 
 
@@ -208,12 +210,14 @@ class RtpDepacketizer:
         if not payload:
             return b""
         if self.video_pt is None:
-            codec = guess_codec(payload)
+            codec = MPEG_PS if payload.startswith(b"\x00\x00\x01\xba") else guess_codec(payload)
             if codec is None:
                 return b""
             self.codec, self.video_pt = codec, pt
         if pt != self.video_pt:
             return b""
+        if self.codec == MPEG_PS:            # Hikvision часто кладёт в RTP программный поток MPEG-PS
+            return payload
         return self._h265(payload) if self.codec == H265 else self._h264(payload)
 
     @staticmethod
@@ -325,8 +329,16 @@ def helper_main() -> int:      # pragma: no cover - нужен реальный 
     depacketizer = RtpDepacketizer()
     ffmpeg = None
     pending = bytearray()
+    import time
+    started = time.monotonic()
+    seen, samples = 0, []
     try:
         for packet in live._client.iter_packets():
+            if ffmpeg is None and time.monotonic() - started > NO_VIDEO_TIMEOUT:
+                return _fail("no_video", f"пакетов {seen}, начало: {' '.join(samples)}")
+            if packet.body and len(samples) < 3:
+                samples.append(f"ch{packet.channel}:{packet.body[:16].hex()}")
+            seen += 1
             if packet.channel == VtmChannel.ENCRYPTED_STREAM:
                 return _fail("encrypted")
             if packet.channel != VtmChannel.STREAM or not packet.body:

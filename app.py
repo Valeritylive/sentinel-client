@@ -3203,6 +3203,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             # Облако отдаёт первый кадр через 5–15 секунд: показываем, что идёт подключение.
             placeholder.set_text(f"{slot_index + 1}\n\nПодключение через облако Hik-Connect…")
             placeholder.set_visible(True)
+            GLib.timeout_add_seconds(40, self._cloud_first_frame_timeout, state)
         else:
             placeholder.set_visible(False)
         self._select_slot(slot_index)
@@ -3288,6 +3289,11 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             GLib.idle_add(self._stream_failed, state["slot"], "облако закрыло поток", state)
         else:
             GLib.idle_add(self._stop_stream_if_current, state)
+
+    def _cloud_first_frame_timeout(self, state):
+        if self.streams.get(state["slot"]) is state and not state["last_frame_time"]:
+            self._stream_failed(state["slot"], "нет кадров 40 секунд", state)
+        return GLib.SOURCE_REMOVE
 
     def _stop_stream_if_current(self, state):
         if self.streams.get(state["slot"]) is state:
