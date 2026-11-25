@@ -414,7 +414,12 @@ class MainWindowMixin:
         workspace.append(self.camera_area)
         self.overview_monitor = workspace
         self.camera_grid_toggle = Gtk.Box()  # совместимость: кнопку заменила ручка левой панели
+        self.bottom_handle = W.button("˅", self.toggle_bottom_panel, "panel-handle panel-handle-h",
+                                      "Скрыть/показать панель воспроизведения")
+        self.bottom_handle.set_hexpand(True)
+        workspace.append(self.bottom_handle)
         workspace.append(self._build_bottom_bar())
+        self._set_bottom_panel(storage.get_setting("bottom_bar_visible", "1") == "1")
 
         self.division = "s4"
         self.stream_mode = layouts.STREAM_AUTO
@@ -634,6 +639,15 @@ class MainWindowMixin:
             full = {"system": "⚙ Система", "search": "⌕ Поиск"}[key]
             widget.set_label(full.split(" ", 1)[0] if decision.compact_top else full)
         return decision
+
+    def toggle_bottom_panel(self):
+        visible = not self.playback_bar.get_visible()
+        self._set_bottom_panel(visible)
+        storage.set_setting("bottom_bar_visible", "1" if visible else "0")
+
+    def _set_bottom_panel(self, visible):
+        self.playback_bar.set_visible(visible)
+        self.bottom_handle.set_label("˅" if visible else "˄")
 
     def _toggle_left_panel(self):
         self.user_left_panel = not self.left_revealer.get_reveal_child()

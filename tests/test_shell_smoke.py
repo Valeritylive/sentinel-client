@@ -56,6 +56,15 @@ class LayoutSmoke(ShellSmoke):
         decision = self.win._apply_adaptive(1600)
         self.assertTrue(decision.left and decision.right)
 
+    def test_bottom_panel_toggle_is_remembered(self):
+        self.assertTrue(self.win.playback_bar.get_visible())
+        self.win.toggle_bottom_panel()
+        self.assertFalse(self.win.playback_bar.get_visible())
+        self.assertEqual(self.win.bottom_handle.get_label(), "˄")
+        self.assertEqual(storage.get_setting("bottom_bar_visible"), "0")
+        self.win.toggle_bottom_panel()
+        self.assertTrue(self.win.playback_bar.get_visible())
+
     def test_notify_goes_to_bell(self):
         self.win.notify("проверка", error=True)
         self.assertEqual(self.win.notifications[0][1], "проверка")

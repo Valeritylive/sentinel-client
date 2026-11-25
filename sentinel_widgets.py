@@ -35,6 +35,7 @@ headerbar button:hover { background: #2a2b2f; }
 .side-panel { background: #202124; border-right: 1px solid #111; }
 .side-panel.right { border-right: none; border-left: 1px solid #111; }
 .panel-handle { background: #26272b; border: none; min-width: 10px; padding: 0; color: #8b8d93; border-radius: 0; }
+.panel-handle-h { min-width: 0; min-height: 10px; font-size: 9px; padding: 0; }
 .panel-handle:hover { background: #303136; color: #fff; }
 .section-title { font-weight: 600; }
 expander title { padding: 6px 4px; }
