@@ -1,0 +1,87 @@
+# Flatpak-манифест Sentinel.
+# Платформа GNOME уже содержит GTK 4, GStreamer (с gst-libav), PyGObject, pycairo и WebKitGTK 6.
+# Внутрь пакета дополнительно собираются secret-tool (хранение паролей устройств)
+# и минимальный FFmpeg (запись, экспорт и резервная запись на ПК без перекодирования).
+#
+# Локальная сборка:
+#   flatpak install flathub org.gnome.Platform//47 org.gnome.Sdk//47
+#   flatpak-builder --user --install --force-clean build-dir packaging/flatpak/io.sentinel.VideoClient.yml
+#   flatpak run io.sentinel.VideoClient
+app-id: io.sentinel.VideoClient
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+command: sentinel-video-client
+finish-args:
+  - --share=network            # камеры, регистраторы, SADP-поиск (мультикаст)
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --socket=pulseaudio        # звук камер
+  - --talk-name=org.freedesktop.secrets   # пароли устройств в системном хранилище
+  - --filesystem=xdg-pictures/Sentinel:create
+  - --filesystem=xdg-videos/Sentinel:create
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+  - '*.a'
+
+modules:
+  - name: libsecret
+    buildsystem: meson
+    config-opts:
+      - -Dmanpage=false
+      - -Dgtk_doc=false
+      - -Dvapi=false
+      - -Dintrospection=false
+    sources:
+      - type: git
+        url: https://gitlab.gnome.org/GNOME/libsecret.git
+        tag: 0.21.4
+
+  - name: ffmpeg
+    config-opts:
+      - --disable-everything
+      - --disable-doc
+      - --disable-debug
+      - --disable-ffplay
+      - --disable-ffprobe
+      - --disable-autodetect
+      - --enable-network
+      - --enable-protocol=file,pipe,rtsp,rtp,tcp,udp
+      - --enable-demuxer=concat,rtsp,rtp,sdp,matroska,mov
+      - --enable-muxer=matroska,segment,mp4
+      - --enable-parser=h264,hevc,aac
+      - --enable-decoder=h264,hevc,aac,pcm_alaw,pcm_mulaw
+      - --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc
+      - --enable-filter=null,anull,copy,acopy
+    cleanup:
+      - /share/ffmpeg
+    sources:
+      - type: git
+        url: https://github.com/FFmpeg/FFmpeg.git
+        tag: n7.1
+
+  - name: sentinel
+    buildsystem: simple
+    build-commands:
+      - install -Dm644 app.py /app/lib/sentinel/app.py
+      - for module in sentinel_*.py; do install -Dm644 "$module" "/app/lib/sentinel/$module"; done
+      - install -Dm644 VERSION /app/lib/sentinel/VERSION
+      - printf '#!/bin/sh\nexec python3 /app/lib/sentinel/app.py "$@"\n' > sentinel-video-client
+      - install -Dm755 sentinel-video-client /app/bin/sentinel-video-client
+      - install -Dm644 io.sentinel.VideoClient.svg /app/share/icons/hicolor/scalable/apps/io.sentinel.VideoClient.svg
+      - install -d /app/share/applications
+      - sed 's|^Exec=.*|Exec=sentinel-video-client|' io.sentinel.VideoClient.desktop.in > /app/share/applications/io.sentinel.VideoClient.desktop
+      - install -Dm644 packaging/flatpak/io.sentinel.VideoClient.metainfo.xml /app/share/metainfo/io.sentinel.VideoClient.metainfo.xml
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - .flatpak-builder
+          - build-dir
+          - repo
+          - tests

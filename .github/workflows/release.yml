@@ -62,3 +62,38 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" sentinel_*.deb Sentinel-*-x86_64.AppImage --generate-notes
+
+  flatpak:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-47
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Flatpak bundle
+        uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
+        with:
+          bundle: Sentinel.flatpak
+          manifest-path: packaging/flatpak/io.sentinel.VideoClient.yml
+          cache-key: flatpak-builder-${{ hashFiles('packaging/flatpak/io.sentinel.VideoClient.yml') }}
+
+  publish-flatpak:
+    needs: [build, flatpak]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Flatpak bundle
+        uses: actions/download-artifact@v4
+        with:
+          pattern: Sentinel.flatpak*
+          merge-multiple: true
+
+      - name: Attach Flatpak to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mv Sentinel.flatpak "Sentinel-$(cat VERSION)-x86_64.flatpak"
+          gh release upload "$GITHUB_REF_NAME" "Sentinel-$(cat VERSION)-x86_64.flatpak" --clobber
