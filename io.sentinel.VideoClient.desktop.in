@@ -7,3 +7,4 @@ Icon=io.sentinel.VideoClient
 Terminal=false
 Categories=AudioVideo;Video;Security;
 StartupNotify=true
+StartupWMClass=io.sentinel.VideoClient

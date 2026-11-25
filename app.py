@@ -87,6 +87,11 @@ ALARM_READ_TIMEOUT = 45
 ALARM_RECONNECT_MIN = 2
 ALARM_RECONNECT_MAX = 60
 Gst.init(None)
+# Имя программы = id приложения: по нему оболочка сопоставляет окно с ярлыком
+# (WM_CLASS в X11, app_id в Wayland). Иначе при запуске из меню рабочий стол
+# ждёт «своё» окно до таймаута, и запуск выглядит очень долгим.
+GLib.set_prgname(APP_ID)
+GLib.set_application_name("Sentinel")
 
 
 def stylesheet():

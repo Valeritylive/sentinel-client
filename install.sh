@@ -3,7 +3,7 @@ set -eu
 
 SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 DATA_ROOT=${XDG_DATA_HOME:-"$HOME/.local/share"}
-APP_DIR="$DATA_ROOT/sentinel"
+APP_DIR="$HOME/.local/lib/sentinel"  # не в ~/.local/share/sentinel: там база данных
 DESKTOP_DIR="$DATA_ROOT/applications"
 ICON_DIR="$DATA_ROOT/icons/hicolor/scalable/apps"
 
