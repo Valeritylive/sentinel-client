@@ -2092,9 +2092,20 @@ class MainWindowMixin:
         if toast is not None:
             toast.show_message(message, error)
             return
+        # Окна просмотра без панели уведомлений: одно окно на одинаковый текст, без стопок.
+        shown = self.__dict__.setdefault("_open_messages", {})
+        if message in shown:
+            shown[message].present()
+            return
         dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.INFO,
                                    buttons=Gtk.ButtonsType.CLOSE, text=message)
-        dialog.connect("response", lambda instance, *_: instance.close())
+
+        def closed(instance, *_args):
+            shown.pop(message, None)
+            instance.destroy()
+
+        dialog.connect("response", closed)
+        shown[message] = dialog
         dialog.present()
 
     def show_about(self):

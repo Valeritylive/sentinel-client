@@ -3195,15 +3195,29 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         return GLib.SOURCE_REMOVE
 
     def _on_pipeline_message(self, _bus, message, state):
+        if message.type not in (Gst.MessageType.ERROR, Gst.MessageType.EOS):
+            return
+        # При обрыве GStreamer присылает несколько ERROR подряд (каждый элемент конвейера):
+        # реагируем только на первый, иначе пользователь получает стопку одинаковых сообщений.
+        if state.get("ended"):
+            return
+        state["ended"] = True
         if message.type == Gst.MessageType.ERROR:
             error, _debug = message.parse_error()
             slot = state["slot"]
             if self.streams.get(slot) is state:
-                GLib.idle_add(self._stream_failed, slot, str(error))
-        elif message.type == Gst.MessageType.EOS:
-            GLib.idle_add(self._stop_stream, state["slot"])
+                GLib.idle_add(self._stream_failed, slot, str(error), state)
+        else:
+            GLib.idle_add(self._stop_stream_if_current, state)
 
-    def _stream_failed(self, slot, message):
+    def _stop_stream_if_current(self, state):
+        if self.streams.get(state["slot"]) is state:
+            self._stop_stream(state["slot"])
+        return GLib.SOURCE_REMOVE
+
+    def _stream_failed(self, slot, message, state=None):
+        if state is not None and self.streams.get(slot) is not state:
+            return GLib.SOURCE_REMOVE  # окно уже занято другим потоком
         self._stop_stream(slot)
         if getattr(self, "silent_stream_errors", False):
             if slot < len(self.video_slots):
