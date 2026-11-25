@@ -450,6 +450,8 @@ class ServicesMixin:
         threading.Thread(target=self._status_worker, args=(items, quiet), daemon=True).start()
 
     def _status_worker(self, items, quiet):
+        if any(device.get("cloud_serial") for device, _c in items):
+            _refresh_cloud_status()
         results = []
         for device, credentials in items:
             status, info = "offline", {}
@@ -600,3 +602,29 @@ def _cloud_online():
         return hikconnect.cloud_status_map()
     except Exception:
         return {}
+
+
+CLOUD_STATUS_MAX_AGE = 300      # секунд: чаще состояние из Hik-Connect не запрашиваем
+
+
+def _refresh_cloud_status():
+    """Обновить «в сети» из Hik-Connect по сохранённым сессиям (фоновый поток; ошибки не мешают проверке)."""
+    try:
+        import sentinel_hikconnect as hikconnect
+        now = datetime.now().astimezone()
+        for account in hikconnect.load_accounts():
+            if not account.get("auto_sync", 1):
+                continue
+            try:
+                last = datetime.fromisoformat(account.get("last_sync") or "")
+                if (now - last).total_seconds() < CLOUD_STATUS_MAX_AGE:
+                    continue
+            except ValueError:
+                pass
+            try:
+                hikconnect.sync_account(account["id"])
+            except Exception:
+                continue
+        hikconnect.apply_cloud_status()
+    except Exception:
+        pass

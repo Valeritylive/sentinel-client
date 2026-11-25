@@ -45,6 +45,7 @@ expander title { padding: 6px 4px; }
 .status-online { color: #3fbf6f; }
 .cam-idle { color: #6c6e74; }
 .cam-active { color: #3fbf6f; }
+.dev-online { color: #3fbf6f; }
 .status-offline { color: #8b8d93; }
 .status-error { color: #e8232c; }
 .shortcut { background: #2a2b30; border: none; border-radius: 4px; padding: 8px 10px; margin: 2px 6px; }
