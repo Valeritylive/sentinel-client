@@ -197,5 +197,32 @@ class HelperTests(unittest.TestCase):
             helper.cmd_set_password({"username": "bad name;rm", "password": "x"})
 
 
+
+class ClientAddressTests(unittest.TestCase):
+    def test_scheme_defaults(self):
+        import sentinel_remote as remote
+        self.assertEqual(remote.normalize_server_url("127.0.0.1:8765"), "http://127.0.0.1:8765")
+        self.assertEqual(remote.normalize_server_url("localhost"), "http://localhost:8765")
+        self.assertEqual(remote.normalize_server_url("192.168.1.5:8765"), "https://192.168.1.5:8765")
+        self.assertEqual(remote.normalize_server_url("https://127.0.0.1:9000"), "https://127.0.0.1:9000")
+
+    def test_https_to_plain_server_gives_hint(self):
+        import threading
+        import sentinel_engine as engine_mod
+        import sentinel_remote as remote
+        engine = engine_mod.Engine(receive_events=False, recording_enabled=False)
+        server = server_mod.make_server("127.0.0.1", 0, engine)
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        port = server.server_address[1]
+        with self.assertRaises(remote.RemoteError) as ctx:
+            remote.ServerClient(f"https://127.0.0.1:{port}", verify_tls=False, timeout=5).health()
+        self.assertTrue(ctx.exception.plain_http)
+        self.assertIn("http://", str(ctx.exception))
+        self.assertEqual(remote.ServerClient(f"127.0.0.1:{port}", timeout=5).health()["status"], "ok")
+
+
 if __name__ == "__main__":
     unittest.main()

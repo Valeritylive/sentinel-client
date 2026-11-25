@@ -223,9 +223,15 @@ class SettingsWindow(Gtk.ApplicationWindow):
 
         urls = Gtk.Box(spacing=8)
         urls.append(W.label("Адрес для клиента:", "form-label"))
-        self.urls_label = W.label("", "mono", wrap=True)
+        self.urls_label = W.label("", "mono section-title")
         self.urls_label.set_selectable(True)
         urls.append(self.urls_label)
+        copy = W.button("Копировать", self.copy_url, tooltip="Скопировать адрес — вставьте его в клиенте "
+                                                            "(меню пользователя › «Сервер Sentinel…»)")
+        copy.set_hexpand(True)
+        copy.set_halign(Gtk.Align.END)
+        copy.set_valign(Gtk.Align.START)
+        urls.append(copy)
         body.append(urls)
 
         actions = Gtk.Box(spacing=8)
@@ -402,6 +408,14 @@ class SettingsWindow(Gtk.ApplicationWindow):
             self.show_setup()
 
     # ------------------------------------------------------------ действия
+    def copy_url(self):
+        urls = self.status.urls if self.status and self.status.urls else ctl.client_urls(ctl.read_settings())
+        display = Gdk.Display.get_default()
+        if display and urls:
+            display.get_clipboard().set(urls[0])
+            show_message(self.service_message, f"Скопировано: {urls[0]} — вставьте в клиенте целиком, "
+                                               "вместе с http:// или https://")
+
     def service(self, action):
         titles = {"start": "Запускаю сервер…", "stop": "Останавливаю сервер…", "restart": "Перезапускаю сервер…"}
         show_message(self.service_message, titles[action])
