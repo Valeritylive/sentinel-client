@@ -41,7 +41,7 @@ packaging/build-release.sh
 ```sh
 sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-gstreamer-1.0 \
   gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-  gstreamer1.0-plugins-bad gstreamer1.0-libav libsecret-tools ffmpeg \\
+  gstreamer1.0-plugins-bad gstreamer1.0-libav libsecret-tools ffmpeg \
   python3-gi-cairo
 ```
 
