@@ -119,6 +119,21 @@ class ResourceSmoke(ShellSmoke):
         self.win._place_door(controller, 2)
         self.assertEqual(self.win.slot_resources[self.win.selected_slot]["door"], 2)
 
+    def test_active_markers_follow_open_streams(self):
+        self._add("10.0.0.1", [1, 2], "NVR")
+        first, second = self.win.devices
+        markers = {frozenset(ids): label for label, ids in self.win.active_markers}
+        cam1, cam2 = markers[frozenset({first["id"]})], markers[frozenset({second["id"]})]
+        nvr = markers[frozenset({first["id"], second["id"]})]
+        self.assertTrue(cam1.has_css_class("cam-idle"))
+        self.win.streams[0] = {"base_device": first}
+        self.win._update_active_markers()
+        self.assertTrue(cam1.has_css_class("cam-active") and nvr.has_css_class("cam-active"))
+        self.assertTrue(cam2.has_css_class("cam-idle"))
+        self.win.streams.clear()
+        self.win._update_active_markers()
+        self.assertTrue(cam1.has_css_class("cam-idle") and not cam1.has_css_class("cam-active"))
+
     def test_store_probed_access_device(self):
         device = {"name": "Панель", "host": "10.0.0.5", "sdk_port": 8000, "http_port": 80, "rtsp_port": 554,
                   "stream": "main", "protocol": "hikvision", "category": "access", "door_count": 2}

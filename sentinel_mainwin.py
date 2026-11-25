@@ -982,6 +982,7 @@ class MainWindowMixin:
         if not hasattr(self, "resource_list"):
             return
         W.clear(self.resource_list)
+        self.active_markers = []   # (label, {device_id, ...}) — кружки в дереве ресурсов
         query = self.camera_search.get_text().strip().casefold()
         devices = [d for d in self.devices
                    if (not self.hide_offline or d.get("status") != "offline")
@@ -1012,8 +1013,17 @@ class MainWindowMixin:
                 first = channels[0]
                 status = first.get("status", "")
                 icon = "▣" if first.get("category") == "access" else "▤"
-                dot = {"online": "●", "offline": "○"}.get(status, "◌")
-                expander = Gtk.Expander(label=f"{icon} {member['name']}  {dot}")
+                expander = Gtk.Expander()
+                head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                head.append(W.label(f"{icon} {member['name']}"))
+                if first.get("category") != "access":
+                    dot = W.label("●", "cam-idle")
+                    dot.set_tooltip_text("Зелёный — камеры устройства открыты в текущем виде")
+                    head.append(dot)
+                    self.active_markers.append((dot, set(member["ids"])))
+                if status == "offline":
+                    head.append(W.label("не в сети", "muted"))
+                expander.set_label_widget(head)
                 expander.set_expanded(bool(query) or len(members) <= 2)
                 W.on_right_click(expander, lambda w, x, y, m=member, d=first: self._device_menu(m, d, w, x, y))
                 box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
@@ -1026,21 +1036,35 @@ class MainWindowMixin:
                         box.append(self._camera_row(device))
                 expander.set_child(box)
                 target.append(expander)
+        self._update_active_markers()
+
+    def _update_active_markers(self):
+        """Зелёный кружок — камера открыта в текущем виде (живой просмотр или воспроизведение)."""
+        active = {state["base_device"]["id"] for state in self.streams.values()}
+        for marker, ids in self.__dict__.get("active_markers", []):
+            if ids & active:
+                marker.remove_css_class("cam-idle")
+                marker.add_css_class("cam-active")
+            else:
+                marker.remove_css_class("cam-active")
+                marker.add_css_class("cam-idle")
 
     def _camera_row(self, device):
         row = Gtk.Button()
         row.add_css_class("tree-row")
         row.set_has_frame(False)
         status = device.get("status", "")
-        mark = {"online": "status-online", "offline": "status-offline"}.get(status, "")
         content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        icon = W.label("◉" if status != "offline" else "◎", mark)
+        icon = W.label("●", "cam-idle")
         content.append(icon)
+        self.active_markers.append((icon, {device["id"]}))
         name = W.label(device["name"])
         name.set_ellipsize(3)
         name.set_hexpand(True)
         content.append(name)
         row.set_child(content)
+        if status == "offline":
+            content.append(W.label("не в сети", "muted"))
         row.set_tooltip_text(f"{device['host']} · канал {device['channel']}\n"
                              "Щелчок — в выбранное окно; перетащите в ячейку; правая кнопка — действия")
         row.connect("clicked", lambda _b, d=device: self.open_live_dialog(d, self.selected_slot))

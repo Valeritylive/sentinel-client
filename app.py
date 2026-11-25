@@ -3357,6 +3357,8 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             count += sum(len(window.streams) for window in self.monitor_windows)
         if hasattr(self, "stream_count_label"):
             self.stream_count_label.set_text(f"{count} потоков")
+        if "active_markers" in self.__dict__:
+            self._update_active_markers()
         self._update_dashboard()
         self._update_status_bar()
         active = self.streams.get(getattr(self, "selected_slot", -1))
