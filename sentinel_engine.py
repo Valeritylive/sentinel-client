@@ -256,10 +256,18 @@ class Engine:
             if device.get("protocol") == "hikvision":
                 endpoints.setdefault(endpoint_key(device), device)
         results = []
+        try:
+            cloud_online = hikconnect.cloud_status_map()
+        except Exception:
+            cloud_online = {}
         for key, device in endpoints.items():
             if self._stop.is_set():
                 break
             status, info = self.probe_status(device)
+            if status == "offline" and cloud_online.get(device.get("cloud_serial")):
+                # Регистратор из Hik-Connect напрямую недоступен (чужая сеть), но в облаке он в сети:
+                # не перезаписываем состояние, полученное из облака.
+                status = "online"
             self.set_status(key[0], key[1], status, info)
             results.append({"host": key[0], "http_port": key[1], "status": status})
         return results

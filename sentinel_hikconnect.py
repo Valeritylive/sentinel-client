@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import json
 import secrets
 import sqlite3
@@ -638,3 +639,50 @@ def apply_cloud_status() -> int:
                                  "online" if row["online"] else "offline"))
             changed += cursor.rowcount
     return changed
+
+
+# ==================================================================== подсказки при ошибке видео
+_CONNECT_HINTS = ("resource", "ресурс", "could not connect", "connection refused", "timed out", "timeout",
+                  "no route", "unreachable", "не удалось открыть")
+_LAN_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10", "fc00::/7", "fe80::/10"))
+_AUTH_HINTS = ("401", "unauthorized", "not authorized", "authentication", "авториз")
+
+
+def is_private_host(host) -> bool:
+    """Адрес из частной сети (192.168.x.x, 10.x, 172.16-31.x, 169.254.x.x)."""
+    try:
+        address = ipaddress.ip_address(str(host or "").strip())
+    except ValueError:
+        return False
+    return any(address in network for network in _LAN_NETWORKS)
+
+
+def cloud_status_map() -> dict:
+    """{серийный номер: в сети ли устройство по данным Hik-Connect}."""
+    with storage.database() as db:
+        return {r["serial"]: bool(r["online"]) for r in db.execute("SELECT serial, online FROM cloud_devices")}
+
+
+def stream_failure_hint(device, message) -> str:
+    """Понятное объяснение ошибки потока для устройства, импортированного из Hik-Connect.
+
+    Пустая строка — устройство не облачное или причина не распознана.
+    """
+    if not device or not device.get("cloud_serial"):
+        return ""
+    text = str(message or "").lower()
+    name = device.get("host_name") or device.get("name") or device.get("cloud_serial")
+    host = device.get("host", "")
+    if any(h in text for h in _AUTH_HINTS):
+        return (f"{name}: регистратор отклонил логин или пароль. Нужны учётные данные самого регистратора "
+                "(обычно admin), а не пароль аккаунта Hik-Connect. Укажите их в «Система › Устройства».")
+    if any(h in text for h in _CONNECT_HINTS):
+        if is_private_host(host):
+            return (f"{name}: нет связи с {host}:{device.get('rtsp_port', 554)}. Это локальный адрес сети "
+                    "объекта из Hik-Connect, с этого компьютера он доступен только через VPN. Видео через "
+                    "облако Hik-Connect пока не поддерживается: подключитесь к сети объекта (VPN) или "
+                    "пробросьте RTSP-порт на роутере и укажите внешний адрес в «Система › Устройства».")
+        return (f"{name}: нет связи с {host}:{device.get('rtsp_port', 554)}. Проверьте, что RTSP-порт "
+                "проброшен на роутере объекта, или подключитесь к его сети через VPN.")
+    return ""

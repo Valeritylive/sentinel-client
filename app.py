@@ -45,6 +45,7 @@ except ImportError as exc:
     ) from exc
 
 import sentinel_devmgmt as devmgmt
+import sentinel_hikconnect as hikconnect
 import sentinel_widgets as W
 from sentinel_mainwin import MainWindowMixin
 from sentinel_services import ServicesMixin
@@ -3225,7 +3226,12 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
     def _stream_failed(self, slot, message, state=None):
         if state is not None and self.streams.get(slot) is not state:
             return GLib.SOURCE_REMOVE  # окно уже занято другим потоком
+        device = (state or {}).get("base_device") or (state or {}).get("device")
+        hint = hikconnect.stream_failure_hint(device, message)
         self._stop_stream(slot)
+        if hint and not getattr(self, "silent_stream_errors", False):
+            self.notify(hint, error=True)
+            return GLib.SOURCE_REMOVE
         if getattr(self, "silent_stream_errors", False):
             if slot < len(self.video_slots):
                 self.video_slots[slot]["placeholder"].set_text(f"{slot + 1}\n\nПоток недоступен")
