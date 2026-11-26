@@ -24,6 +24,7 @@ import sentinel_arming as arming
 import sentinel_dashboard as dash
 import sentinel_devmgmt as devmgmt
 import sentinel_layouts as layouts
+import sentinel_module_art as module_art
 import sentinel_people as people
 import sentinel_recording as recording
 import sentinel_reports as reports
@@ -941,9 +942,17 @@ class MainWindowMixin:
             for item in allowed:
                 tile = Gtk.Button()
                 tile.add_css_class("home-tile")
-                body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-                body.append(W.label(item.icon, "home-tile-icon", xalign=0.5))
-                body.append(W.label(item.title, xalign=0.5, wrap=True))
+                body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+                art = Gtk.Box()
+                art.add_css_class("home-art")
+                art.add_css_class("home-art-" + str(list(module_art.ACCENTS).index(section)
+                                                     if section in module_art.ACCENTS else 0))
+                art.append(self._module_picture(item))
+                body.append(art)
+                caption = W.label(item.title, "home-tile-title", xalign=0.5, wrap=True)
+                caption.set_vexpand(True)
+                caption.set_valign(Gtk.Align.CENTER)
+                body.append(caption)
                 tile.set_child(body)
                 tile.set_tooltip_text(item.title if item.page else item.title + " (окно «Система»)")
                 tile.connect("clicked", lambda _b, k=item.key: self._show_module(k))
@@ -954,6 +963,25 @@ class MainWindowMixin:
             tools.append(W.button("Окно просмотра на другом экране…", self.open_view_window, flat=True))
         tools.append(W.button("Раздел при запуске…", self.open_local_settings, flat=True))
         self.home_box.append(tools)
+
+    def _module_picture(self, item):
+        """Иллюстрация раздела для плитки (SVG → текстура); при ошибке — крупный значок."""
+        cache = self.__dict__.setdefault("_module_textures", {})
+        texture = cache.get(item.key)
+        if texture is None:
+            markup = module_art.svg(item.key, item.section)
+            try:
+                texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(markup.encode())) if markup else None
+            except (GLib.Error, TypeError, AttributeError):
+                texture = None
+            cache[item.key] = texture or False
+        if not texture:
+            return W.label(item.icon, "home-tile-icon", xalign=0.5)
+        picture = Gtk.Picture.new_for_paintable(texture)
+        picture.set_can_shrink(True)
+        picture.set_size_request(150, 100)
+        picture.set_hexpand(True)
+        return picture
 
     def _activate_tab(self, key):  # совместимость со старым API вкладок модулей
         self._show_module(key)

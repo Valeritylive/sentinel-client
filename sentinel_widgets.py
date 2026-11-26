@@ -37,9 +37,15 @@ button.module-tab { border-radius: 6px 6px 0 0; margin-top: 5px; padding: 2px 10
 .view-strip { background: #1d1e22; padding: 0 4px; }
 .view-strip .view-tab { margin-top: 3px; }
 .home-title { font-size: 20px; font-weight: 700; }
-.home-tile { background: #26272c; border: 1px solid #34353b; border-radius: 8px; padding: 18px 10px; min-width: 150px; min-height: 96px; }
-.home-tile:hover { background: #2e2f35; border-color: #e8232c; }
-.home-tile-icon { font-size: 28px; color: #e8232c; }
+.home-tile { background: #26272c; border: 1px solid #34353b; border-radius: 10px; padding: 0; min-width: 190px; }
+.home-tile:hover { border-color: #e8232c; background: #2b2c31; }
+.home-art { border-radius: 9px 9px 0 0; padding: 12px 10px 8px 10px; }
+.home-art-0 { background: linear-gradient(160deg, #3a2326, #23242a); }
+.home-art-1 { background: linear-gradient(160deg, #3a3124, #23242a); }
+.home-art-2 { background: linear-gradient(160deg, #1f3634, #23242a); }
+.home-art-3 { background: linear-gradient(160deg, #222f42, #23242a); }
+.home-tile-title { font-weight: 600; padding: 9px 8px 11px 8px; min-height: 22px; }
+.home-tile-icon { font-size: 40px; color: #e8232c; }
 .side-panel { background: #202124; border-right: 1px solid #111; }
 .side-panel.right { border-right: none; border-left: 1px solid #111; }
 .panel-handle { background: #26272b; border: none; min-width: 10px; padding: 0; color: #8b8d93; border-radius: 0; }

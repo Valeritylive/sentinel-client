@@ -38,6 +38,14 @@ class ShellTests(unittest.TestCase):
         t.open("main_view"); t.open("access")
         self.assertEqual(t.close("main_view"), "access")
 
+    def test_every_module_has_art(self):
+        import sentinel_module_art as art
+        import xml.etree.ElementTree as ET
+        for item in S.MODULES:
+            markup = art.svg(item.key, item.section)
+            self.assertIsNotNone(markup, item.key)
+            ET.fromstring(markup)   # корректный SVG/XML
+
 
 if __name__ == "__main__":
     unittest.main()
