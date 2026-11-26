@@ -114,6 +114,14 @@ class ServerClient:
     def events(self, limit=200):
         return self.request("GET", "/events", params={"limit": limit})["items"]
 
+    # ------------------------------------------------------------ охрана
+    def arming(self):
+        return self.request("GET", "/arming")
+
+    def set_arming(self, scope, armed, target=0, targets=None):
+        return self.request("POST", "/arming", {"scope": scope, "armed": bool(armed), "target": target,
+                                                "targets": targets})
+
     # ------------------------------------------------------------ виды
     def views(self):
         return self.request("GET", "/views")

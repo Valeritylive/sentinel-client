@@ -131,6 +131,9 @@ def _migrate_hcl_model(db: sqlite3.Connection) -> None:
         public INTEGER NOT NULL DEFAULT 0, layout TEXT NOT NULL DEFAULT '{}',
         updated_at TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL DEFAULT '')""")
     _add_column(db, "saved_views", "group_id", "INTEGER REFERENCES view_groups(id) ON DELETE SET NULL")
+    # Точки карты: камера, дверь (number — номер двери) или тревожный вход (number — номер входа)
+    _add_column(db, "map_hotspots", "kind", "TEXT NOT NULL DEFAULT 'camera'")
+    _add_column(db, "map_hotspots", "number", "INTEGER NOT NULL DEFAULT 0")
     _add_column(db, "devices", "area", "TEXT NOT NULL DEFAULT ''")
     _add_column(db, "devices", "firmware", "TEXT NOT NULL DEFAULT ''")
     _add_column(db, "devices", "time_zone", "TEXT NOT NULL DEFAULT ''")

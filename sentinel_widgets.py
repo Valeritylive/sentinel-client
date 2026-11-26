@@ -55,6 +55,11 @@ expander title { padding: 6px 4px; }
 .camera-tile.selected { border: 2px solid #e8232c; }
 .rec-continuous { color: #2985e0; } .rec-motion { color: #edc733; } .rec-alarm { color: #e03333; }
 .rec-smart { color: #9e66e6; } .rec-local { color: #40bf73; }
+.map-point { background: alpha(#1b1c20, 0.85); color: #e8e8ea; border: 1px solid #3a3b40; border-radius: 12px; padding: 1px 8px; }
+.map-point.map-door { border-color: #3b8fd9; } .map-point.map-input { border-color: #d9a43b; }
+.map-point.map-disarmed { color: #8d8f96; background: alpha(#1b1c20, 0.55); border: 1px dashed #6a6c72; }
+.map-point.map-alarm { border-color: #e8232c; }
+.map-point.map-alarm-on { background: #e8232c; color: #fff; }
 .board-card { background: #232428; border: 1px solid #2f3035; border-radius: 6px; padding: 12px; }
 .board-card button, .board-card button label { color: #cfd3da; }
 .tile-toolbar { background: alpha(#000, 0.6); border-radius: 4px; padding: 1px; }

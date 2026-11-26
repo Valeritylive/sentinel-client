@@ -20,6 +20,7 @@ from pathlib import Path
 from gi.repository import Gdk, GLib, GObject, Gtk
 
 import sentinel_alarms as alarms
+import sentinel_arming as arming
 import sentinel_dashboard as dash
 import sentinel_devmgmt as devmgmt
 import sentinel_layouts as layouts
@@ -1044,6 +1045,7 @@ class MainWindowMixin:
                                               "muted", wrap=True))
             return
         groups = getattr(self, "groups", [])
+        arming_states = arming.load_states()
         rows = devmgmt.physical_devices(devices, groups)
         by_id = {d["id"]: d for d in devices}
         tree = devmgmt.group_tree(groups, rows)
@@ -1054,9 +1056,16 @@ class MainWindowMixin:
             if group is not None or len(tree) > 1:
                 group_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
                 group_box.set_margin_start(10)
-                expander = Gtk.Expander(label=f"◫ {group['name'] if group else 'Без области'}")
+                area = arming.area_state(group["id"] if group else 0, self.devices, arming_states)
+                expander = Gtk.Expander(label=f"◫ {group['name'] if group else 'Без области'}  "
+                                              f"{arming.STATE_ICONS[area]}")
+                expander.set_tooltip_text(f"Область {arming.STATE_TITLES[area]} · правый щелчок — охрана")
                 expander.set_expanded(True)
                 expander.set_child(group_box)
+                if self._can_arm():
+                    W.on_right_click(expander, lambda w, x, y, g=group: W.popover_menu(w, [
+                        ("🛡 Поставить область на охрану", lambda: self.arm_area(g, True)),
+                        ("○ Снять область с охраны", lambda: self.arm_area(g, False))], x, y))
                 self.resource_list.append(expander)
                 target = group_box
             for member in members:
@@ -1074,6 +1083,11 @@ class MainWindowMixin:
                     self.active_markers.append((dot, set(member["ids"])))
                 if status == "offline":
                     head.append(W.label("не в сети", "muted"))
+                disarmed = [c for c in channels if not arming.effective(c, arming_states)]
+                if disarmed:
+                    mark = W.label("○ снято" if len(disarmed) == len(channels) else "◐", "muted")
+                    mark.set_tooltip_text(f"Снято с охраны каналов: {len(disarmed)} из {len(channels)}")
+                    head.append(mark)
                 expander.set_label_widget(head)
                 expander.set_expanded(bool(query) or len(members) <= 2)
                 W.on_right_click(expander, lambda w, x, y, m=member, d=first: self._device_menu(m, d, w, x, y))
@@ -1162,6 +1176,8 @@ class MainWindowMixin:
             ("Переименовать", lambda: self._ask_text("Название устройства", member["name"],
                                                      lambda n: self.rename_physical_device(member, n))),
             ("Проверить состояние", lambda: self.check_all_devices([device])),
+            ("Показать на карте", lambda: self.show_device_on_map(device["id"])),
+            *self.arming_menu_items(member["ids"], member["name"]),
             None,
             ("Удалить", lambda: self._confirm_delete_devices(None, member["ids"], f"устройство {member['name']}"))],
             x, y)
@@ -1992,6 +2008,8 @@ class MainWindowMixin:
         def acknowledge():
             text = save_fields()
             alarms.acknowledge([record_id], self.session.username, text)
+            if record.get("device_id"):
+                self.stop_map_flash(record["device_id"])
             self._refresh_alarm_panel()
             self._update_status_bar()
             nxt = alarms.load_alarm_records(1, status="unacknowledged")
@@ -2002,6 +2020,8 @@ class MainWindowMixin:
 
         footer.append(W.button("Подтвердить", acknowledge, "red-button"))
         footer.append(W.button("Тревожный выход…", lambda: self.alarm_output_dialog(record)))
+        if record.get("device_id"):
+            footer.append(W.button("На карте", lambda: self.show_device_on_map(record["device_id"])))
         footer.append(W.button("Сохранить", lambda: (save_fields(), self.notify("Сохранено"))))
         spacer = Gtk.Box()
         spacer.set_hexpand(True)
@@ -2157,6 +2177,16 @@ class MainWindowMixin:
         bar.append(self.event_status)
         bar.append(W.button("Подписки на события…", lambda: self.open_system("event")))
         page.append(bar)
+        guard = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.arming_summary = W.label("", "section-title")
+        self.arming_summary.set_hexpand(True)
+        guard.append(self.arming_summary)
+        guard.append(W.button("🛡 Поставить всё на охрану", lambda: self.arm_system(True)))
+        guard.append(W.button("○ Снять всё с охраны", lambda: self._confirm(
+            "Снять всю систему с охраны? Тревоги перестанут создаваться, события будут записываться в журнал.",
+            lambda: self.arm_system(False), "Снять с охраны")))
+        guard.append(W.button("✓ Подтвердить все новые", self.batch_acknowledge))
+        page.append(guard)
         self.event_center_table = W.Table(("Время",), selectable=False)
         page.append(self.event_center_table)
         # старые атрибуты монитора тревог
@@ -2168,6 +2198,7 @@ class MainWindowMixin:
     def _render_event_center(self):
         if not hasattr(self, "event_center_table"):
             return
+        self._update_arming_summary()
         kind = self.event_center_kind.get_selected()
         text = self.event_center_search.get_text().strip()
         if kind == 0:

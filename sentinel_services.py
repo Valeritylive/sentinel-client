@@ -22,6 +22,7 @@ from pathlib import Path
 from gi.repository import GLib
 
 import sentinel_alarms as alarms
+import sentinel_arming as arming
 import sentinel_archive as archive
 import sentinel_people as people
 import sentinel_recording as recording
@@ -187,7 +188,9 @@ class ServicesMixin:
         with storage.database() as db:
             holidays = [dict(r) for r in db.execute("SELECT * FROM holidays")]
         rules = alarms.match_rules(event, alarms.load_rules(True), people.vehicle_index(), people.get_schedule,
-                                   holidays=holidays)
+                                   holidays=holidays) if arming.event_raises_alarms(event) else []
+        if event.get("state") != "inactive":
+            self._flash_map_device(event.get("device_id"), alarm=bool(rules))
         for rule in rules:
             record_id = alarms.create_alarm_record(rule, event, event_id)
             self._run_linkage(rule, event, record_id)

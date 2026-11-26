@@ -44,6 +44,7 @@ except ImportError as exc:
         "Установите gir1.2-gtk-4.0 и gir1.2-gstreamer-1.0."
     ) from exc
 
+import sentinel_alarms as alarms
 import sentinel_archive as archive
 import sentinel_devmgmt as devmgmt
 import sentinel_cloudstream as cloudstream
@@ -55,6 +56,7 @@ from sentinel_services import ServicesMixin
 from sentinel_tilebar import TileBarMixin
 from sentinel_board import BoardMixin
 from sentinel_viewshare import ViewShareMixin
+from sentinel_alarmmap import AlarmMapMixin
 import sentinel_layouts as layouts
 import sentinel_protocols as protocols
 import sentinel_shell as shell
@@ -114,7 +116,7 @@ def make_label(text: str, css_class: str | None = None):
     return label
 
 
-class SentinelWindow(BoardMixin, ViewShareMixin, MainWindowMixin, ServicesMixin, TileBarMixin, Gtk.ApplicationWindow):
+class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, MainWindowMixin, ServicesMixin, TileBarMixin, Gtk.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Sentinel — видеонаблюдение")
         self.set_resizable(True)
@@ -643,7 +645,8 @@ class SentinelWindow(BoardMixin, ViewShareMixin, MainWindowMixin, ServicesMixin,
         self.map_choice.connect("notify::selected", lambda *_: self._render_map())
         controls.append(make_label("Карта"))
         controls.append(self.map_choice)
-        controls.append(self._button("＋ Точка камеры", self.add_map_hotspot))
+        controls.append(self._button("＋ Точка", self.add_map_hotspot))
+        controls.append(self._button("🛡 Охрана точек карты", self._map_arming_menu))
         controls.append(self._button("Удалить карту", self.delete_map))
         page.append(controls)
         self.map_status = make_label("Добавьте изображение плана или карты, затем разместите точки камер.", "muted")
@@ -719,45 +722,16 @@ class SentinelWindow(BoardMixin, ViewShareMixin, MainWindowMixin, ServicesMixin,
             self.map_choice.set_selected(min(self.map_choice.get_selected(), len(self.maps) - 1))
         self._render_map()
 
-    def _render_map(self):
-        if not hasattr(self, "map_picture"):
-            return
-        self._clear_box(self.map_points)
+    def _map_arming_menu(self, *_args):
         selected = self.map_choice.get_selected()
         if selected == Gtk.INVALID_LIST_POSITION or selected >= len(getattr(self, "maps", [])):
-            self.map_picture.set_paintable(None)
-            self.map_status.set_text("Добавьте изображение плана или карты, затем разместите точки камер.")
             return
-        current = self.maps[selected]
-        image_path = Path(current["image_path"])
-        if not image_path.is_file():
-            self.map_picture.set_paintable(None)
-            self.map_status.set_text(f"Файл карты не найден: {image_path}")
+        ids = sorted({p["device_id"] for p in self._map_hotspots(self.maps[selected]["id"])})
+        items = self.arming_menu_items(ids, f"карта «{self.maps[selected]['name']}»")
+        if not items:
+            self.notify("На карте нет точек или нет прав на постановку на охрану")
             return
-        try:
-            self.map_picture.set_filename(str(image_path))
-        except GLib.Error as exc:
-            self.map_status.set_text(f"Не удалось открыть карту: {exc.message}")
-            return
-        with database() as db:
-            points = [dict(row) for row in db.execute("""SELECT h.*,d.name AS camera_name,d.host,d.channel
-                FROM map_hotspots h JOIN devices d ON d.id=h.device_id WHERE h.map_id=? ORDER BY h.id""", (current["id"],))]
-        self.map_status.set_text(f"{current['name']} · точек камер: {len(points)} · щёлкните точку для live view")
-        GLib.idle_add(self._place_map_points, points)
-
-    def _place_map_points(self, points):
-        width = max(1, self.map_canvas.get_width())
-        height = max(1, self.map_canvas.get_height())
-        for point in points:
-            marker = Gtk.Button(label="● " + point["label"])
-            marker.set_tooltip_text(f"{point['camera_name']} · {point['host']} CH {point['channel']}\nПравый клик — удалить точку")
-            marker.connect("clicked", lambda _b, p=point: self.open_live_dialog(next((d for d in self.devices if d["id"] == p["device_id"]), None)))
-            context = Gtk.GestureClick()
-            context.set_button(3)
-            context.connect("released", lambda _g, _n, _x, _y, p=point: self.delete_map_hotspot(p["id"]))
-            marker.add_controller(context)
-            self.map_points.put(marker, point["x"] * width / 100.0, point["y"] * height / 100.0)
-        return GLib.SOURCE_REMOVE
+        W.popover_menu(self.map_choice, items)
 
     def add_map(self, *_args):
         chooser = Gtk.FileChooserNative.new("Выберите изображение карты", self, Gtk.FileChooserAction.OPEN,
@@ -790,45 +764,6 @@ class SentinelWindow(BoardMixin, ViewShareMixin, MainWindowMixin, ServicesMixin,
         dialog.connect("response", response_cb)
         dialog.present()
         chooser.destroy()
-
-    def add_map_hotspot(self, *_args):
-        selected = self.map_choice.get_selected()
-        if selected == Gtk.INVALID_LIST_POSITION or selected >= len(getattr(self, "maps", [])):
-            self.notify("Сначала выберите или добавьте карту")
-            return
-        if not self.devices:
-            self.notify("Сначала добавьте камеры в раздел «Устройства»")
-            return
-        dialog = Gtk.Dialog(title="Точка камеры на карте", transient_for=self, modal=True)
-        dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
-        dialog.add_button("Добавить", Gtk.ResponseType.ACCEPT)
-        form = Gtk.Grid(column_spacing=10, row_spacing=9, margin_top=14, margin_bottom=14,
-                        margin_start=14, margin_end=14)
-        camera = Gtk.DropDown.new_from_strings([f"{d['name']} · {d['host']} CH {d['channel']}" for d in self.devices])
-        label = Gtk.Entry(placeholder_text="Название точки")
-        xpos = Gtk.SpinButton.new_with_range(0, 100, 1); xpos.set_value(50)
-        ypos = Gtk.SpinButton.new_with_range(0, 100, 1); ypos.set_value(50)
-        self._field(form, "Камера", camera, 0); self._field(form, "Подпись", label, 1)
-        self._field(form, "Позиция X, %", xpos, 2); self._field(form, "Позиция Y, %", ypos, 3)
-        dialog.get_content_area().append(form)
-        def response(dlg, result):
-            if result == Gtk.ResponseType.ACCEPT:
-                if camera.get_selected() == Gtk.INVALID_LIST_POSITION:
-                    self.notify("Выберите камеру")
-                    return
-                device = self.devices[camera.get_selected()]
-                title = label.get_text().strip() or device["name"]
-                with database() as db:
-                    db.execute("INSERT INTO map_hotspots(map_id,device_id,label,x,y) VALUES(?,?,?,?,?)",
-                               (self.maps[selected]["id"], device["id"], title, xpos.get_value() / 100, ypos.get_value() / 100))
-                self._render_map()
-            dlg.close()
-        dialog.connect("response", response); dialog.present()
-
-    def delete_map_hotspot(self, hotspot_id):
-        with database() as db:
-            db.execute("DELETE FROM map_hotspots WHERE id=?", (hotspot_id,))
-        self._render_map()
 
     def delete_map(self, *_args):
         selected = self.map_choice.get_selected()

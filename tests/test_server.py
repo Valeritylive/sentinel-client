@@ -71,6 +71,24 @@ class ServerTests(unittest.TestCase):
             viewer.hikconnect_accounts()
         self.assertEqual(ctx.exception.status, 403)
 
+    def test_arming_api(self):
+        self.admin.request("POST", "/devices", {"name": "NVR", "host": "10.0.0.7", "channels": [1, 2],
+                                                "username": "admin", "password": "x"})
+        status = self.admin.arming()
+        self.assertEqual(status["summary"], {"armed": 2, "total": 2})
+        first = sorted(status["devices"])[0]
+        viewer = remote.ServerClient(self.url)
+        viewer.login("viewer", "View3r-pass!")
+        viewer.set_arming("device", False, targets=[int(first)])
+        status = self.admin.arming()
+        self.assertFalse(status["devices"][first])
+        self.assertEqual(status["summary"]["armed"], 1)
+        self.admin.set_arming("system", True)
+        self.assertEqual(self.admin.arming()["summary"]["armed"], 2)
+        with self.assertRaises(remote.RemoteError) as ctx:
+            self.admin.set_arming("room", True)
+        self.assertEqual(ctx.exception.status, 400)
+
     def test_private_and_public_views(self):
         viewer = remote.ServerClient(self.url)
         viewer.login("viewer", "View3r-pass!")

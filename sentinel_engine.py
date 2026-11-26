@@ -29,6 +29,7 @@ import urllib.request
 from datetime import datetime
 
 import sentinel_alarms as alarms
+import sentinel_arming as arming
 import sentinel_hikconnect as hikconnect
 import sentinel_layouts as layouts
 import sentinel_people as people
@@ -360,8 +361,9 @@ class Engine:
         with storage.database() as db:
             holidays = [dict(r) for r in db.execute("SELECT * FROM holidays")]
         records = []
-        for rule in alarms.match_rules(event, alarms.load_rules(True), people.vehicle_index(), people.get_schedule,
-                                       holidays=holidays):
+        rules = alarms.match_rules(event, alarms.load_rules(True), people.vehicle_index(), people.get_schedule,
+                                   holidays=holidays) if arming.event_raises_alarms(event) else []
+        for rule in rules:
             record_id = alarms.create_alarm_record(rule, event, event_id)
             records.append(record_id)
             self._run_linkage(rule, event, record_id)

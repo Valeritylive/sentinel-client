@@ -40,6 +40,7 @@ sys.path.insert(0, str(ROOT))
 import sentinel_alarms as alarms  # noqa: E402
 import sentinel_engine as engine_mod  # noqa: E402
 import sentinel_hikconnect as hikconnect  # noqa: E402
+import sentinel_arming as arming  # noqa: E402
 import sentinel_security as security  # noqa: E402
 import sentinel_shared_views as shared_views  # noqa: E402
 import sentinel_storage as storage  # noqa: E402
@@ -520,6 +521,30 @@ def event_stream(h, _body):
     finally:
         h.engine.bus.unsubscribe(subscriber)
     return None
+
+
+# ==================================================================== охрана
+@route("GET", "/arming", "live")
+def arming_status(h, _body):
+    states = arming.load_states()
+    devices = h.engine.devices()
+    return {"states": [{"scope": s, "target": t, **v} for (s, t), v in states.items()],
+            "devices": {str(d["id"]): arming.effective(d, states) for d in devices},
+            "summary": dict(zip(("armed", "total"), arming.summary(devices, states)))}
+
+
+@route("POST", "/arming", "alarm_ack")
+def set_arming(h, body):
+    scope = body.get("scope", arming.DEVICE)
+    armed = bool(body.get("armed", True))
+    targets = body.get("targets")
+    if scope == arming.DEVICE and isinstance(targets, list):
+        arming.set_devices_armed([int(t) for t in targets], armed, h.session.username)
+    else:
+        arming.set_armed(scope, int(body.get("target") or 0), armed, h.session.username)
+    h.audit("Поставлено на охрану" if armed else "Снято с охраны", f"{scope}:{targets or body.get('target', 0)}")
+    h.engine.bus.publish("arming", {"scope": scope, "armed": armed})
+    return {"ok": True}
 
 
 # ==================================================================== виды (приватные и публичные)
