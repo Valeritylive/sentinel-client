@@ -29,6 +29,7 @@ POLL_SECONDS = 3
 ACCESS = (("127.0.0.1", "Только этот компьютер (127.0.0.1)"),
           ("0.0.0.0", "Все сетевые интерфейсы (0.0.0.0)"),
           ("", "Другой адрес…"))
+CLUSTER_ROLES = (("standalone", "Одиночный сервер"), ("primary", "Основной"), ("standby", "Резервный"))
 STATE_BADGE = {"running": ("ok", "● Работает"), "warning": ("unknown", "● Нужна настройка"),
                "starting": ("unknown", "● Запуск"), "stopped": ("unknown", "● Остановлен"),
                "error": ("bad", "● Ошибка"), "missing": ("bad", "● Не установлен")}
@@ -195,6 +196,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
         content.append(self._build_status())
         content.append(self._build_admin())
         content.append(self._build_network())
+        content.append(self._build_cluster())
         scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
         scroller.set_child(content)
         self.set_child(scroller)
@@ -317,6 +319,115 @@ class SettingsWindow(Gtk.ApplicationWindow):
         body.append(self.network_message)
         return frame
 
+    def _build_cluster(self):
+        frame, body = card("Кластер: горячий резерв",
+                           "Два сервера работают парой: резервный хранит копию базы и запускает службы, если "
+                           "основной перестал отвечать. Ключ одинаковый на обоих узлах. Подробная настройка "
+                           "и мастер пары есть и в клиенте: «Конфигурация системы › Кластер серверов».")
+        self.cluster_state = W.label("Роль узла: …", "section-title")
+        body.append(self.cluster_state)
+        grid = form_grid()
+        self.cluster_role = Gtk.DropDown.new_from_strings([title for _r, title in CLUSTER_ROLES])
+        self.cluster_role.connect("notify::selected", lambda *_: self._sync_cluster())
+        self.cluster_node = Gtk.Entry(placeholder_text="имя этого узла")
+        self.cluster_peer = Gtk.Entry(placeholder_text="https://10.0.0.2:8765")
+        self.cluster_key = password_entry("создаётся автоматически, если пусто")
+        self.cluster_witness = Gtk.Entry(placeholder_text="необязательно: шлюз 10.0.0.254:80")
+        self.cluster_failover = Gtk.SpinButton.new_with_range(5, 3600, 1)
+        self.cluster_failover.set_value(30)
+        self.cluster_ca = Gtk.Entry(placeholder_text="сертификат второго узла (PEM)")
+        form_row(grid, 0, "Роль", self.cluster_role)
+        form_row(grid, 1, "Имя узла", self.cluster_node)
+        form_row(grid, 2, "Второй узел", self.cluster_peer)
+        form_row(grid, 3, "Общий ключ", self.cluster_key)
+        form_row(grid, 4, "Контрольный узел", self.cluster_witness)
+        form_row(grid, 5, "Переключение, с", self.cluster_failover)
+        form_row(grid, 6, "Сертификат CA", self._with_browse(self.cluster_ca, "Сертификат второго узла (PEM)"))
+        body.append(grid)
+        self.cluster_verify = Gtk.CheckButton(label="Проверять сертификат TLS второго узла")
+        self.cluster_verify.set_active(True)
+        body.append(self.cluster_verify)
+        keys = Gtk.Box(spacing=8)
+        keys.append(W.button("Новый ключ", self.new_cluster_key))
+        keys.append(W.button("Копировать ключ", self.copy_cluster_key, flat=True))
+        body.append(keys)
+        row = Gtk.Box(spacing=8)
+        row.append(W.button("Загрузить настройки", self.load_cluster,
+                            tooltip="Файл настроек доступен только службе — потребуется пароль администратора ПК"))
+        self.cluster_save = W.button("Сохранить и перезапустить сервер", self.save_cluster, "red-button")
+        row.append(self.cluster_save)
+        body.append(row)
+        self.cluster_message = message_label()
+        body.append(self.cluster_message)
+        self._sync_cluster()
+        return frame
+
+    def _sync_cluster(self):
+        clustered = CLUSTER_ROLES[self.cluster_role.get_selected()][0] != "standalone"
+        for widget in (self.cluster_peer, self.cluster_key, self.cluster_witness, self.cluster_failover,
+                       self.cluster_ca, self.cluster_verify):
+            widget.set_sensitive(clustered)
+
+    def fill_cluster(self, config):
+        roles = [r for r, _t in CLUSTER_ROLES]
+        self.cluster_role.set_selected(roles.index(config.get("role")) if config.get("role") in roles else 0)
+        self.cluster_node.set_text(config.get("node") or "")
+        self.cluster_peer.set_text(config.get("peer_url") or "")
+        self.cluster_key.set_text(config.get("key") or "")
+        self.cluster_witness.set_text(config.get("witness") or "")
+        self.cluster_failover.set_value(int(config.get("failover") or 30))
+        self.cluster_ca.set_text(config.get("ca_file") or "")
+        self.cluster_verify.set_active(bool(config.get("verify_tls", True)))
+        self._sync_cluster()
+
+    def cluster_settings(self):
+        return {"role": CLUSTER_ROLES[self.cluster_role.get_selected()][0], "node": self.cluster_node.get_text().strip(),
+                "peer_url": self.cluster_peer.get_text().strip(), "key": self.cluster_key.get_text().strip(),
+                "witness": self.cluster_witness.get_text().strip(),
+                "failover": int(self.cluster_failover.get_value()), "ca_file": self.cluster_ca.get_text().strip(),
+                "verify_tls": self.cluster_verify.get_active()}
+
+    def load_cluster(self):
+        show_message(self.cluster_message, "Читаю настройки…")
+
+        def done(config, error):
+            if error:
+                show_message(self.cluster_message, str(error), ok=False)
+                return
+            self.fill_cluster(config or {})
+            show_message(self.cluster_message, "Настройки загружены")
+        run_async(ctl.cluster_config, done)
+
+    def save_cluster(self):
+        values = self.cluster_settings()
+        if values["role"] != "standalone" and not values["peer_url"]:
+            show_message(self.cluster_message, "Укажите адрес второго узла", ok=False)
+            return
+        self.cluster_save.set_sensitive(False)
+        show_message(self.cluster_message, "Сохраняю и перезапускаю сервер…")
+
+        def done(saved, error):
+            self.cluster_save.set_sensitive(True)
+            if error:
+                show_message(self.cluster_message, str(error), ok=False)
+                return
+            self.fill_cluster(saved or values)
+            show_message(self.cluster_message, "Сохранено, сервер перезапущен. Если ключ создан заново, задайте его "
+                                               "и на втором узле.")
+            self.refresh()
+        run_async(lambda: ctl.save_cluster(values, restart=True), done)
+
+    def new_cluster_key(self):
+        import secrets
+        self.cluster_key.set_text(secrets.token_hex(32))
+        show_message(self.cluster_message, "Новый ключ создан — сохраните и задайте его на втором узле")
+
+    def copy_cluster_key(self):
+        display = Gdk.Display.get_default()
+        if display and self.cluster_key.get_text():
+            display.get_clipboard().set(self.cluster_key.get_text())
+            show_message(self.cluster_message, "Ключ скопирован")
+
     def _with_browse(self, entry, title):
         box = Gtk.Box(spacing=6)
         entry.set_hexpand(True)
@@ -403,6 +514,14 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self.autostart.set_active(status.enabled)
         self.autostart.set_sensitive(installed)
         self.autostart.handler_unblock(self._autostart_handler)
+        node = getattr(status, "cluster", None)
+        if node:
+            role = dict(CLUSTER_ROLES).get(node.get("role"), node.get("role"))
+            self.cluster_state.set_text(f"Роль узла: {role.lower()} «{node.get('node', '')}», "
+                                        + ("активен" if node.get("active") else "в ожидании"))
+        else:
+            self.cluster_state.set_text("Роль узла: одиночный сервер" if installed and status.active
+                                        else "Роль узла: сервер не отвечает")
         self.setup_banner.set_visible(bool(status.setup_required))
         if status.setup_required and (self.want_setup or not self.setup_shown):
             self.show_setup()

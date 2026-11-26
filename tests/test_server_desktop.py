@@ -93,6 +93,11 @@ class StatusTests(unittest.TestCase):
         self.assertEqual((setup.state, setup.setup_required), ("warning", True))
         self.assertTrue(setup.active)
         self.assertEqual(self.status(props, None).state, "error")   # давно запущен, но не отвечает
+        standby = self.status(props, {"version": "0.6.3", "cluster": {"role": "standby", "node": "b",
+                                                                       "active": False}})
+        self.assertEqual((standby.state, standby.text), ("running", "Резервный узел в ожидании"))
+        self.assertEqual(standby.cluster["role"], "standby")
+        self.assertIsNone(running.cluster)
 
     def test_tray_menu_follows_state(self):
         tray = _tray_module()
@@ -147,6 +152,16 @@ class CommandTests(unittest.TestCase):
         self.assertEqual([(u["username"], u["role"]) for u in users],
                          [("admin", "Администратор"), ("valerii", "Администратор")])
 
+    def test_cluster_set_and_status_json(self):
+        with patch("sys.stdin", io.StringIO('{"role": "primary", "peer_url": "https://10.0.0.2:8765", "bogus": 1}')):
+            saved = json.loads(self.run_cli("cluster-set"))
+        self.assertEqual((saved["role"], len(saved["key"])), ("primary", 64))
+        self.assertNotIn("bogus", saved)
+        self.assertEqual(json.loads(self.run_cli("cluster-status", "--json"))["key"], saved["key"])
+        with patch("sys.stdin", io.StringIO('{"role": "standby", "peer_url": ""}')), \
+                patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
+            self.run_cli("cluster-set")
+
     def test_reset_password_rejects_weak(self):
         with self.assertRaises(SystemExit):
             self.run_cli("reset-password", password="123")
@@ -195,6 +210,21 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(calls, [([helper.SERVER_BIN, "reset-password", "--username", "admin"], "S3cret-pass")])
         with self.assertRaises(SystemExit), patch("sys.stderr", io.StringIO()):
             helper.cmd_set_password({"username": "bad name;rm", "password": "x"})
+
+    def test_cluster_set_passes_config_via_stdin(self):
+        calls = []
+
+        class Done:
+            returncode, stdout, stderr = 0, '{"role": "standby"}', ""
+
+        def fake_run(args, **kwargs):
+            calls.append((args, kwargs.get("input")))
+            return Done()
+        with patch.object(helper.subprocess, "run", fake_run), redirect_stdout(io.StringIO()) as out:
+            helper.cmd_cluster_set({"values": {"role": "standby", "key": "k" * 64}, "restart": False})
+        self.assertEqual(calls[0][0], [helper.SERVER_BIN, "cluster-set"])
+        self.assertEqual(json.loads(calls[0][1])["key"], "k" * 64)     # ключ не в аргументах процесса
+        self.assertIn("standby", out.getvalue())
 
 
 

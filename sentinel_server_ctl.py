@@ -183,6 +183,7 @@ class Status:
     setup_required: bool | None = None
     version: str = ""
     urls: list = field(default_factory=list)
+    cluster: dict | None = None     # роль узла горячего резерва из /health (None — одиночный сервер)
 
     @property
     def active(self):
@@ -263,11 +264,16 @@ def get_status(settings=None, props=None, health=...):
                       f"Нет ответа на {urls[0]} — проверьте адрес, порт и сертификат", enabled, urls=urls)
     setup = bool(health.get("setup_required"))
     version = str(health.get("version", ""))
+    node = health.get("cluster") if isinstance(health.get("cluster"), dict) else None
     if setup:
         return Status("warning", "Работает, администратор не создан",
-                      "Задайте логин и пароль администратора в настройках сервера", enabled, True, version, urls)
+                      "Задайте логин и пароль администратора в настройках сервера", enabled, True, version, urls,
+                      node)
+    if node and not node.get("active"):
+        return Status("running", "Резервный узел в ожидании", f"Версия {version}. Службы запустятся, если основной "
+                      "узел перестанет отвечать." if version else "", enabled, False, version, urls, node)
     return Status("running", "Сервер работает", f"Версия {version}" if version else "", enabled, False, version,
-                  urls)
+                  urls, node)
 
 
 def last_log_lines(count=4):
@@ -357,3 +363,13 @@ def certificate_fingerprint(path):
     except ControlError:
         return ""
     return out.strip().split("=", 1)[-1] if "=" in out else ""
+
+
+def cluster_config():
+    """Настройки кластера сервера (через помощник: файл доступен только службе)."""
+    return json.loads(run_helper("cluster-get") or "{}")
+
+
+def save_cluster(values, restart=True):
+    return json.loads(run_helper("cluster-set", payload={"values": values, "restart": bool(restart)}) or "{}")
+

@@ -1028,7 +1028,7 @@ def cmd_hikconnect_devices(_args):
               f" {d['local_ip'] or d['wan_ip']}")
 
 
-COMMANDS = ("run", "create-admin", "reset-password", "list-users", "hikconnect-login", "hikconnect-devices", "cluster-init", "cluster-status")
+COMMANDS = ("run", "create-admin", "reset-password", "list-users", "hikconnect-login", "hikconnect-devices", "cluster-init", "cluster-set", "cluster-status")
 
 
 def cmd_cluster_init(args):
@@ -1049,8 +1049,28 @@ def cmd_cluster_init(args):
     print("Перезапустите сервер, чтобы применить.")
 
 
-def cmd_cluster_status(_args):
+def cmd_cluster_set(_args):
+    """Настройки кластера JSON-объектом со stdin (так их передаёт окно настроек сервера через помощник)."""
+    try:
+        values = json.loads(sys.stdin.read() or "{}")
+    except json.JSONDecodeError as exc:
+        raise SystemExit("Ожидается JSON на stdin") from exc
     config = cluster.load_config()
+    config.update({k: v for k, v in values.items() if k in cluster.DEFAULTS})
+    if config["role"] != cluster.STANDALONE and not str(config.get("key") or "").strip():
+        config["key"] = cluster.new_key()
+    try:
+        saved = cluster.save_config(config)
+    except cluster.ClusterError as exc:
+        raise SystemExit(f"Ошибка: {exc}") from exc
+    print(json.dumps(saved, ensure_ascii=False))
+
+
+def cmd_cluster_status(args):
+    config = cluster.load_config()
+    if getattr(args, "json", False):
+        print(json.dumps(config, ensure_ascii=False))
+        return
     print(f"Роль: {cluster.ROLE_TITLES[config['role']]} · узел {config['node']} · второй узел "
           f"{config['peer_url'] or '—'} · переключение через {config['failover']} с · контрольный узел "
           f"{config['witness'] or 'нет'}")
@@ -1102,7 +1122,9 @@ def build_parser():
     init.add_argument("--heartbeat", type=int, default=5)
     init.add_argument("--no-verify-tls", action="store_true", help="не проверять сертификат второго узла")
     init.add_argument("--ca-file", help="сертификат CA второго узла")
-    sub.add_parser("cluster-status", parents=[common], help="показать настройки кластера")
+    status = sub.add_parser("cluster-status", parents=[common], help="показать настройки кластера")
+    status.add_argument("--json", action="store_true", help="вывести настройки (с ключом) в JSON")
+    sub.add_parser("cluster-set", parents=[common], help="задать настройки кластера JSON-объектом со stdin")
     return parser
 
 
@@ -1121,7 +1143,8 @@ def main(argv=None):
     handlers = {"run": cmd_run, "create-admin": cmd_create_admin,
                 "reset-password": cmd_reset_password, "list-users": cmd_list_users,
                 "hikconnect-login": cmd_hikconnect_login, "hikconnect-devices": cmd_hikconnect_devices,
-                "cluster-init": cmd_cluster_init, "cluster-status": cmd_cluster_status}
+                "cluster-init": cmd_cluster_init, "cluster-set": cmd_cluster_set,
+                "cluster-status": cmd_cluster_status}
     try:
         handlers[args.command](args)
     except (ValueError, hikconnect.HikConnectError, storage.CredentialStoreError) as exc:

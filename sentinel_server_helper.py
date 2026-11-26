@@ -5,7 +5,7 @@
 (polkit спрашивает пароль администратора компьютера). Данные — JSON на stdin, чтобы пароль
 не попадал в список процессов.
 
-Команды: set-password, set-config, gen-cert, enable, disable, list-users.
+Команды: set-password, set-config, gen-cert, enable, disable, list-users, cluster-get, cluster-set.
 """
 from __future__ import annotations
 
@@ -167,7 +167,32 @@ def cmd_list_users(_payload):
     print(result.stdout.strip())
 
 
+def cmd_cluster_get(_payload):
+    result = subprocess.run([SERVER_BIN, "cluster-status", "--json"], capture_output=True, text=True, timeout=30,
+                            cwd="/")
+    if result.returncode:
+        fail(result.stderr.strip() or "Не удалось прочитать настройки кластера")
+    print(result.stdout.strip())
+
+
+def cmd_cluster_set(payload):
+    values = payload.get("values") or {}
+    if not isinstance(values, dict):
+        fail("Настройки кластера: ожидается объект")
+    if values.get("ca_file"):
+        values["ca_file"] = _install_tls_file(values["ca_file"], "peer-ca.pem", 0o644)
+    result = subprocess.run([SERVER_BIN, "cluster-set"], capture_output=True, text=True, timeout=30, cwd="/",
+                            input=json.dumps(values))
+    if result.returncode:
+        fail(result.stderr.strip() or "Не удалось сохранить настройки кластера")
+    if payload.get("restart"):
+        _systemctl("restart", ctl.SERVICE)
+    print(result.stdout.strip())
+
+
 COMMANDS = {
+    "cluster-get": cmd_cluster_get,
+    "cluster-set": cmd_cluster_set,
     "set-password": cmd_set_password,
     "set-config": cmd_set_config,
     "gen-cert": cmd_gen_cert,
