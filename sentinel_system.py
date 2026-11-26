@@ -1696,6 +1696,7 @@ class SystemWindow(Gtk.Window):
                                     ("holiday", "Праздники", self._holiday_config),
                                     ("network", "Время и сеть", self._network_config),
                                     ("decoding", "Видео и декодирование", self._decoding_config),
+                                    ("maps", "Онлайн-карты", self._maps_config),
                                     ("capability", "Возможности сервиса", self._capability_config),
                                     ("cluster", "Кластер серверов", self._cluster_config)):
             button = Gtk.ToggleButton(label=title)
@@ -1951,6 +1952,145 @@ class SystemWindow(Gtk.Window):
         show_windows()
         self.decoding_page = {"mode": mode, "backend": backend, "transport": transport, "save": save, "status": status,
                               "windows": windows, "found": found}
+        return box
+
+    def _maps_config(self):
+        import sentinel_geomap as geo
+        settings = geo.load_settings()
+        state = {"custom": [dict(p) for p in settings["custom_providers"]]}
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        W.margins(box, 16)
+        box.append(W.label("Онлайн-карты", "section-title"))
+        box.append(W.label("Подложка для карт типа «Онлайн-карта» в разделе «Электронная карта». Карты из своего "
+                           "изображения работают как прежде. Загруженные тайлы сохраняются на диске и показываются "
+                           "без интернета.", "muted", wrap=True))
+        form = _form()
+        provider = _field(form, 0, "Подложка по умолчанию", Gtk.DropDown.new_from_strings([]))
+        offline = _field(form, 1, "Без интернета", Gtk.CheckButton(label="Показывать только сохранённые тайлы"))
+        offline.set_active(settings["offline"])
+        days = _field(form, 2, "Обновлять тайлы старше, дней", Gtk.SpinButton.new_with_range(1, 365, 1))
+        days.set_value(settings["cache_days"])
+        size = _field(form, 3, "Предел кэша на диске, МБ", Gtk.SpinButton.new_with_range(20, 20000, 10))
+        size.set_value(settings["cache_mb"])
+        geocoder = _field(form, 4, "Сервис поиска адреса", Gtk.Entry(text=settings["geocoder_url"],
+                                                                   placeholder_text="Пусто — искать только координаты"))
+        lat = _field(form, 5, "Центр новых карт: широта", Gtk.SpinButton.new_with_range(-85, 85, 0.0001))
+        lon = _field(form, 6, "Центр новых карт: долгота", Gtk.SpinButton.new_with_range(-180, 180, 0.0001))
+        for spin, value in ((lat, settings["default_lat"]), (lon, settings["default_lon"])):
+            spin.set_digits(6)
+            spin.set_value(value)
+        zoom = _field(form, 7, "Масштаб новых карт", Gtk.SpinButton.new_with_range(1, 19, 1))
+        zoom.set_value(settings["default_zoom"])
+        box.append(form)
+        cache_label = W.label("", "muted")
+
+        def show_cache():
+            def worker():
+                mb = geo.cache_size_bytes() / 1024 / 1024
+                GLib.idle_add(lambda: (cache_label.set_text(f"Сейчас в кэше: {mb:.1f} МБ · {geo.cache_root()}"),
+                                       False)[1])
+            threading.Thread(target=worker, daemon=True).start()
+
+        def clear_cache():
+            geo.clear_cache()
+            show_cache()
+            self.owner.reload_online_maps()
+            self.owner.notify("Кэш тайлов очищен")
+
+        box.append(_toolbar(cache_label, _spacer(), W.button("Очистить кэш", clear_cache)))
+
+        box.append(W.label("Свои источники тайлов", "section-title"))
+        box.append(W.label("Любой сервер тайлов в проекции Web Mercator (XYZ): свой картографический сервер "
+                           "в закрытой сети, коммерческая подложка по ключу или папка с тайлами на диске. В адресе: "
+                           "{z} — масштаб, {x}/{y} — номер тайла, {s} — поддомен, {-y} — номер по схеме TMS. "
+                           "Пример папки: /srv/tiles/{z}/{x}/{y}.png", "muted", wrap=True))
+        custom_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box.append(custom_box)
+
+        def fill_providers():
+            current = dict(settings, custom_providers=state["custom"])
+            items = geo.providers(current)
+            state["items"] = items
+            previous, chosen = state.get("items_prev"), provider.get_selected()
+            wanted = previous[chosen]["id"] if previous and chosen < len(previous) else settings["default_provider"]
+            provider.set_model(Gtk.StringList.new([p["name"] for p in items]))
+            provider.set_selected(next((i for i, p in enumerate(items) if p["id"] == wanted), 0))
+            state["items_prev"] = items
+            W.clear(custom_box)
+            if not state["custom"]:
+                custom_box.append(W.label("Своих источников нет.", "muted"))
+            for index, item in enumerate(state["custom"]):
+                row = _toolbar(W.label(f"{item['name']} · {item['url']}", None), _spacer(),
+                               W.button("Изменить", lambda i=index: edit_provider(i)),
+                               W.button("Удалить", lambda i=index: (state["custom"].pop(i), fill_providers())))
+                custom_box.append(row)
+
+        def edit_provider(index=None):
+            item = state["custom"][index] if index is not None else {"name": "", "url": "", "subdomains": "",
+                                                                      "max_zoom": 19, "attribution": ""}
+            dialog = _dialog(self.owner, "Источник тайлов", "Сохранить", 560)
+            grid = _form()
+            name = _field(grid, 0, "Название", Gtk.Entry(text=item["name"]))
+            url = _field(grid, 1, "Адрес тайлов", Gtk.Entry(text=item["url"],
+                                                           placeholder_text="https://tiles.example.org/{z}/{x}/{y}.png"))
+            subdomains = _field(grid, 2, "Поддомены {s}", Gtk.Entry(text=item["subdomains"], placeholder_text="abc"))
+            maxz = _field(grid, 3, "Максимальный масштаб", Gtk.SpinButton.new_with_range(1, 22, 1))
+            maxz.set_value(item["max_zoom"])
+            attribution = _field(grid, 4, "Подпись на карте", Gtk.Entry(text=item["attribution"],
+                                                                       placeholder_text="© владелец данных"))
+            error = W.label("", "status-error", wrap=True)
+            grid.attach(error, 0, 5, 2, 1)
+            dialog.get_content_area().append(grid)
+
+            def response(dlg, result):
+                if result == Gtk.ResponseType.ACCEPT:
+                    problem = geo.validate_template(url.get_text())
+                    if problem:
+                        error.set_text(problem)
+                        return
+                    new = geo.normalize_provider({"id": item.get("id", ""), "name": name.get_text(),
+                                                  "url": url.get_text(), "subdomains": subdomains.get_text(),
+                                                  "max_zoom": maxz.get_value_as_int(),
+                                                  "attribution": attribution.get_text()})
+                    if index is None:
+                        taken = {p["id"] for p in geo.providers(dict(settings, custom_providers=state["custom"]))}
+                        base, n = new["id"], 2
+                        while new["id"] in taken:
+                            new["id"] = f"{base}-{n}"
+                            n += 1
+                        state["custom"].append(new)
+                    else:
+                        state["custom"][index] = new
+                    fill_providers()
+                dlg.close()
+
+            dialog.connect("response", response)
+            dialog.present()
+
+        box.append(_toolbar(W.button("＋ Добавить источник", lambda: edit_provider())))
+
+        def save():
+            items = state.get("items") or geo.providers(settings)
+            chosen = items[min(provider.get_selected(), len(items) - 1)]["id"]
+            saved = geo.save_settings({
+                "default_provider": chosen, "custom_providers": state["custom"], "offline": offline.get_active(),
+                "cache_days": days.get_value_as_int(), "cache_mb": size.get_value_as_int(),
+                "geocoder_url": geocoder.get_text().strip(), "default_lat": lat.get_value(),
+                "default_lon": lon.get_value(), "default_zoom": zoom.get_value_as_int()})
+            settings.update(saved)
+            alarms.log_operation(self.owner.session.username, "Настройки онлайн-карт",
+                                 f"подложка {chosen}, своих источников: {len(state['custom'])}")
+            self.owner.reload_online_maps()
+            self.owner.notify("Настройки онлайн-карт сохранены")
+
+        box.append(_toolbar(W.button("Сохранить и применить", save, "red-button")))
+        box.append(W.label("Встроенные подложки берутся из открытых источников и требуют доступа в интернет; "
+                           "соблюдайте их условия использования (подпись внизу карты обязательна). Для объектов без "
+                           "интернета подключите свой сервер тайлов или папку с тайлами.", "muted", wrap=True))
+        fill_providers()
+        show_cache()
+        self.maps_page = {"provider": provider, "offline": offline, "custom": state, "save": save,
+                          "edit_provider": edit_provider}
         return box
 
     def _capability_config(self):

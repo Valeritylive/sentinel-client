@@ -88,6 +88,7 @@ expander title { padding: 6px 4px; }
 .map-point.map-disarmed { color: #8d8f96; background: alpha(#1b1c20, 0.55); border: 1px dashed #6a6c72; }
 .map-point.map-alarm { border-color: #e8232c; }
 .map-point.map-alarm-on { background: #e8232c; color: #fff; }
+.map-attribution { background: alpha(#000000, 0.55); color: #d6d6da; font-size: 8pt; padding: 1px 6px; border-radius: 4px 0 0 0; }
 .board-card { background: #232428; border: 1px solid #2f3035; border-radius: 6px; padding: 12px; }
 .board-card button, .board-card button label { color: #cfd3da; }
 .tile-toolbar { background: alpha(#000, 0.6); border-radius: 4px; padding: 1px; }
@@ -240,12 +241,21 @@ def fit_contain(picture):
         picture.set_keep_aspect_ratio(True)
 
 
+def point_rect(x, y):
+    """Прямоугольник 1×1 для Popover.set_pointing_to.
+
+    Gdk.Rectangle(x=…, y=…) в новых PyGObject игнорирует аргументы — меню всплывало в углу."""
+    rect = Gdk.Rectangle()
+    rect.x, rect.y, rect.width, rect.height = int(x), int(y), 1, 1
+    return rect
+
+
 def popover_menu(parent, items, x=None, y=None):
     """Контекстное меню: items = [(title, callback) | None (разделитель)]."""
     popover = Gtk.Popover()
     popover.set_parent(parent)
     if x is not None:
-        popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
+        popover.set_pointing_to(point_rect(x, y))
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
     for item in items:
         if item is None:

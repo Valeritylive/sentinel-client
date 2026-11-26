@@ -136,6 +136,15 @@ def _migrate_hcl_model(db: sqlite3.Connection) -> None:
     # Точки карты: камера, дверь (number — номер двери) или тревожный вход (number — номер входа)
     _add_column(db, "map_hotspots", "kind", "TEXT NOT NULL DEFAULT 'camera'")
     _add_column(db, "map_hotspots", "number", "INTEGER NOT NULL DEFAULT 0")
+    # Онлайн-карты: тип карты (image — своё изображение, online — тайлы), источник и сохранённый вид;
+    # точки онлайн-карты хранят географические координаты.
+    _add_column(db, "maps", "kind", "TEXT NOT NULL DEFAULT 'image'")
+    _add_column(db, "maps", "provider", "TEXT NOT NULL DEFAULT ''")
+    _add_column(db, "maps", "center_lat", "REAL")
+    _add_column(db, "maps", "center_lon", "REAL")
+    _add_column(db, "maps", "zoom", "REAL")
+    _add_column(db, "map_hotspots", "lat", "REAL")
+    _add_column(db, "map_hotspots", "lon", "REAL")
     _add_column(db, "devices", "area", "TEXT NOT NULL DEFAULT ''")
     _add_column(db, "devices", "firmware", "TEXT NOT NULL DEFAULT ''")
     _add_column(db, "devices", "time_zone", "TEXT NOT NULL DEFAULT ''")
