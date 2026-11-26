@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Sentinel Server
+Comment=Sentinel server status icon in the system tray
+Comment[ru]=Значок состояния сервера Sentinel в трее
+Exec=/usr/bin/sentinel-server-tray --show
+Icon=io.sentinel.Server
+Terminal=false
+Categories=System;Monitor;Security;
+StartupNotify=false

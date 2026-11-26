@@ -125,7 +125,15 @@ def _migrate_hcl_model(db: sqlite3.Connection) -> None:
     """Таблицы модулей в стиле HikCentral Lite: виды, персоны, ТС, доступ, тревоги, пользователи."""
     db.execute("""CREATE TABLE IF NOT EXISTS view_groups (
         id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)""")
+    # Виды на сервере: приватные (owner) и публичные; камеры — по адресу и каналу.
+    db.execute("""CREATE TABLE IF NOT EXISTS shared_views (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, owner TEXT NOT NULL,
+        public INTEGER NOT NULL DEFAULT 0, layout TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL DEFAULT '')""")
     _add_column(db, "saved_views", "group_id", "INTEGER REFERENCES view_groups(id) ON DELETE SET NULL")
+    # Точки карты: камера, дверь (number — номер двери) или тревожный вход (number — номер входа)
+    _add_column(db, "map_hotspots", "kind", "TEXT NOT NULL DEFAULT 'camera'")
+    _add_column(db, "map_hotspots", "number", "INTEGER NOT NULL DEFAULT 0")
     _add_column(db, "devices", "area", "TEXT NOT NULL DEFAULT ''")
     _add_column(db, "devices", "firmware", "TEXT NOT NULL DEFAULT ''")
     _add_column(db, "devices", "time_zone", "TEXT NOT NULL DEFAULT ''")

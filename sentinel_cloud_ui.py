@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 import urllib.parse
 
 from gi.repository import GLib, Gtk
@@ -385,32 +386,98 @@ class ServerLink:
         self.client = None
         self.stop = None
         self.online = False
+        self.session = 0            # номер подключения: фоновое переключение прекращается при смене
+        self._login = None          # (пользователь, пароль, TLS, CA) — только в памяти на время сеанса
+        self._failing = False
+        self._lock = threading.Lock()
 
     @property
     def connected(self):
         return self.client is not None and bool(self.client.token)
 
     def settings(self):
-        return storage.get_json_setting(SERVER_SETTING, {"url": "", "username": "admin", "verify_tls": True,
-                                                         "ca_file": "", "listen": True, "auto": False})
+        return storage.get_json_setting(SERVER_SETTING, {"url": "", "backup_url": "", "username": "admin",
+                                                         "verify_tls": True, "ca_file": "", "listen": True,
+                                                         "auto": False})
 
-    def connect(self, url, username, password, verify_tls=True, ca_file="", listen=True, remember=False):
-        """Вход (вызывать в рабочем потоке). Возвращает сводку сервера."""
-        client = remote.ServerClient(url, verify_tls=verify_tls, ca_file=ca_file or None)
-        client.login(username, password)
+    def candidates(self):
+        """Адреса узлов кластера: основной, затем резервный (без повторов)."""
+        settings = self.settings()
+        urls = []
+        for url in (settings.get("url"), settings.get("backup_url")):
+            if url:
+                url = remote.normalize_server_url(url)
+                if url not in urls:
+                    urls.append(url)
+        return urls
+
+    @staticmethod
+    def find_active(urls, verify_tls=True, ca_file=""):
+        """Первый узел, который отвечает и активен (резервный в ожидании отвечает active=false)."""
+        errors = []
+        for url in urls:
+            probe = remote.ServerClient(url, verify_tls=verify_tls, ca_file=ca_file or None, timeout=6)
+            try:
+                health = probe.health()
+            except remote.RemoteError as exc:
+                errors.append(f"{probe.base_url}: {exc}")
+                continue
+            if health.get("active", True):
+                return probe
+            errors.append(f"{probe.base_url}: резервный узел в ожидании")
+        raise remote.RemoteError("Нет активного сервера. " + "; ".join(errors))
+
+    def connect(self, url, username, password, verify_tls=True, ca_file="", listen=True, remember=False,
+                backup_url=None):
+        """Вход (вызывать в рабочем потоке). Возвращает сводку сервера.
+
+        С резервным адресом выбирается активный узел кластера, а при потере связи клиент сам
+        переключается на другой узел."""
+        primary = remote.normalize_server_url(url)
+        if backup_url is None:
+            backup_url = self.settings().get("backup_url") or ""
+        backup = remote.normalize_server_url(backup_url) if backup_url.strip() else ""
+        if backup and backup != primary:
+            client = self.find_active([primary, backup], verify_tls, ca_file)
+        else:
+            client = remote.ServerClient(url, verify_tls=verify_tls, ca_file=ca_file or None)
+            try:
+                client.login(username, password)
+            except remote.RemoteError as exc:
+                # адрес введён без http:// или https:// и схема не угадана — пробуем другую сами
+                if remote.has_scheme(url) or not (exc.plain_http or exc.tls_required):
+                    raise
+                scheme = "http://" if exc.plain_http else "https://"
+                client = remote.ServerClient(scheme + url.strip(), verify_tls=verify_tls, ca_file=ca_file or None)
+            primary = client.base_url
+        if not client.token:
+            client.login(username, password)
         summary = client.system()
         self.disconnect()
-        self.client = client
-        storage.set_json_setting(SERVER_SETTING, {"url": client.base_url, "username": username,
+        with self._lock:
+            self.session += 1
+            self.client = client
+            self._login = (username, password, bool(verify_tls), ca_file or "")
+        storage.set_json_setting(SERVER_SETTING, {"url": primary, "backup_url": backup, "username": username,
                                                   "verify_tls": bool(verify_tls), "ca_file": ca_file or "",
                                                   "listen": bool(listen), "auto": bool(remember)})
         if remember:
-            storage.save_json_secret(SERVER_SECRET, client.base_url, {"username": username, "password": password})
+            storage.save_json_secret(SERVER_SECRET, primary, {"username": username, "password": password})
         if listen:
             self.start_listening()
+        GLib.idle_add(self._views_changed)
         return summary
 
+    def _views_changed(self):
+        refresh = getattr(self.owner, "_refresh_server_views", None)
+        if refresh:
+            refresh()
+        return False
+
     def disconnect(self, forget=False):
+        with self._lock:
+            self.session += 1
+            self._login = None
         if self.stop is not None:
             self.stop.set()
             self.stop = None
@@ -419,14 +486,16 @@ class ServerLink:
             self.client = None
             _start(client.logout)
             if forget:
-                try:
-                    storage.delete_json_secret(SERVER_SECRET, client.base_url)
-                except storage.CredentialStoreError:
-                    pass
                 settings = self.settings()
+                for url in {settings.get("url") or client.base_url, client.base_url}:
+                    try:
+                        storage.delete_json_secret(SERVER_SECRET, remote.normalize_server_url(url))
+                    except (storage.CredentialStoreError, ValueError):
+                        pass
                 settings["auto"] = False
                 storage.set_json_setting(SERVER_SETTING, settings)
         self.online = False
+        GLib.idle_add(self._views_changed)
 
     def start_listening(self):
         if self.stop is not None:
@@ -436,13 +505,69 @@ class ServerLink:
 
     def _state(self, online, reason):
         self.online = online
-        if not online and reason:
+        if online:
+            return
+        if reason:
             GLib.idle_add(self.owner.notify, f"Связь с сервером потеряна: {reason}", True)
+        if self._login is not None and len(self.candidates()) > 1 and not self._failing:
+            self._failing = True
+            _start(self._failover_loop, self.session)
+
+    def _failover_loop(self, session, attempts=None, delay=2.0):
+        """Фоновый поиск активного узла, пока связь не вернётся или подключение не сменится."""
+        try:
+            tries = 0
+            while session == self.session and not self.online:
+                try:
+                    if self.switch_to_active(session):
+                        return
+                except (remote.RemoteError, ValueError, OSError):
+                    pass
+                tries += 1
+                if attempts is not None and tries >= attempts:
+                    return
+                time.sleep(delay)
+                delay = min(delay * 2, 30.0)
+        finally:
+            self._failing = False
+
+    def switch_to_active(self, session=None):
+        """Найти активный узел и войти на него (вызывать в рабочем потоке). True — подключено."""
+        login = self._login
+        if login is None or (session is not None and session != self.session):
+            return False
+        username, password, verify_tls, ca_file = login
+        probe = self.find_active(self.candidates(), verify_tls, ca_file)
+        probe.login(username, password)
+        with self._lock:
+            if session is not None and session != self.session or self._login is None:
+                _start(probe.logout)
+                return False
+            old, self.client = self.client, probe
+        listening = self.stop is not None
+        if listening:
+            self.start_listening()
+        if old is not None:
+            _start(old.logout)
+        if old is None or old.base_url != probe.base_url:
+            alarms.log_operation(getattr(getattr(self.owner, "session", None), "username", ""),
+                                 "Переключение на резервный сервер", probe.base_url)
+            GLib.idle_add(self.owner.notify, f"Переключено на сервер {probe.base_url} (активный узел кластера)",
+                          False)
+        GLib.idle_add(self._views_changed)
+        return True
 
     def _message(self, message):
         kind, data = message.get("type"), message.get("data") or {}
+        if kind == "views":
+            GLib.idle_add(self._views_changed)
+            return
         text = None
         if kind == "alarm":
+            if data.get("device_id") and hasattr(self.owner, "wall_show_alarm"):
+                local = self._local_device_id(data)
+                if local:
+                    GLib.idle_add(lambda: (self.owner.wall_show_alarm(device_id=local, any_alarm=True), False)[1])
             text = (f"Сервер · тревога «{data.get('rule_name', '')}»: {data.get('device_name', '')} "
                     f"{alarms.event_title(data.get('event_type', ''))}")
         elif kind == "device_status" and data.get("status") == "offline":
@@ -451,6 +576,14 @@ class ServerLink:
             text = f"Сервер: {data.get('message', '')}"
         if text:
             GLib.idle_add(self.owner.notify, text, kind in ("alarm", "device_status") or bool(data.get("error")))
+
+    def _local_device_id(self, data):
+        """id камеры в каталоге клиента для устройства тревоги сервера (по адресу и каналу)."""
+        host, channel = data.get("host"), str(data.get("channel") or "")
+        for device in self.owner.devices:
+            if host and device["host"] == host and str(device.get("channel")) == channel:
+                return device["id"]
+        return None
 
     def pull_devices(self):
         """Скопировать каталог сервера в клиент (вызывать в рабочем потоке). (добавлено, [ошибки])."""
@@ -498,6 +631,20 @@ class ServerLink:
         return added, errors
 
 
+def cluster_text(info):
+    """Строка о кластере для статуса подключения ('' для одиночного сервера)."""
+    if not info or info.get("role") in (None, "standalone"):
+        return ""
+    role = {"primary": "основной", "standby": "резервный"}.get(info.get("role"), info.get("role"))
+    state = "активен" if info.get("active") else "в ожидании"
+    text = f" · кластер: узел {info.get('node') or ''} ({role}, {state})"
+    if info.get("promoted"):
+        text += ", работает вместо основного"
+    if info.get("peer_ok") is False:
+        text += ", второй узел недоступен"
+    return text
+
+
 def server_link(owner):
     link = owner.__dict__.get("server_link")
     if link is None:
@@ -536,10 +683,12 @@ def open_server_dialog(owner):
                        "пользователи, правила тревог и аккаунты Hik-Connect на сервере.", "muted", wrap=True))
     form = _form()
     url = _field(form, 0, "Адрес сервера", Gtk.Entry(text=settings.get("url") or "",
-                                                       placeholder_text="https://server:8765"))
-    user = _field(form, 1, "Пользователь", Gtk.Entry(text=settings.get("username") or "admin"))
-    password = _field(form, 2, "Пароль", Gtk.PasswordEntry(show_peek_icon=True))
-    ca_file = _field(form, 3, "Файл CA (необязательно)", Gtk.Entry(text=settings.get("ca_file") or "",
+                                                       placeholder_text="http://127.0.0.1:8765 или https://сервер:8765"))
+    backup = _field(form, 1, "Резервный сервер", Gtk.Entry(text=settings.get("backup_url") or "",
+                                                            placeholder_text="необязательно: https://standby:8765"))
+    user = _field(form, 2, "Пользователь", Gtk.Entry(text=settings.get("username") or "admin"))
+    password = _field(form, 3, "Пароль", Gtk.PasswordEntry(show_peek_icon=True))
+    ca_file = _field(form, 4, "Файл CA (необязательно)", Gtk.Entry(text=settings.get("ca_file") or "",
                                                                    placeholder_text="/путь/к/cert.pem"))
     verify = Gtk.CheckButton(label="Проверять сертификат TLS")
     verify.set_active(settings.get("verify_tls", True))
@@ -547,7 +696,7 @@ def open_server_dialog(owner):
     listen.set_active(settings.get("listen", True))
     auto = Gtk.CheckButton(label="Подключаться автоматически при запуске (пароль — в хранилище секретов)")
     auto.set_active(settings.get("auto", False))
-    for row, widget in enumerate((verify, listen, auto), start=4):
+    for row, widget in enumerate((verify, listen, auto), start=5):
         form.attach(widget, 1, row, 1, 1)
     box.append(form)
     status = W.label("Подключено: " + link.client.base_url if link.connected else "Не подключено", "muted", wrap=True)
@@ -558,6 +707,9 @@ def open_server_dialog(owner):
     pull_button.set_sensitive(link.connected)
     disconnect_button.set_sensitive(link.connected)
     box.append(_row(connect_button, pull_button, _spacer(), disconnect_button))
+    cluster_button = W.button("Кластер серверов…", lambda: (dialog.close(), owner.open_system("config", "cluster")),
+                              tooltip="Горячий резерв: роль сервера, второй узел, переключения")
+    box.append(_row(cluster_button))
 
     def connected(summary):
         connect_button.set_sensitive(True)
@@ -567,7 +719,8 @@ def open_server_dialog(owner):
         password.set_text("")
         status.set_text(f"Подключено: {link.client.base_url} · пользователь {link.client.user['username']} "
                         f"({link.client.user['role']}) · устройств {summary['devices']}, в сети {summary['online']}, "
-                        f"неподтверждённых тревог {summary['unacknowledged_alarms']}")
+                        f"неподтверждённых тревог {summary['unacknowledged_alarms']}"
+                        + cluster_text(summary.get("cluster")))
         pull_button.set_sensitive(True)
         disconnect_button.set_sensitive(True)
         alarms.log_operation(owner.session.username, "Подключение к серверу", link.client.base_url)
@@ -580,7 +733,7 @@ def open_server_dialog(owner):
         connect_button.set_sensitive(False)
         status.set_text("Подключение…")
         args = (url.get_text(), user.get_text().strip(), password.get_text(), verify.get_active(),
-                ca_file.get_text().strip(), listen.get_active(), auto.get_active())
+                ca_file.get_text().strip(), listen.get_active(), auto.get_active(), backup.get_text().strip())
         _run(owner, lambda: link.connect(*args), connected, "Сервер Sentinel")
 
     def pulled(result):

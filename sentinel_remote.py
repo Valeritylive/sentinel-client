@@ -1,6 +1,8 @@
 """Клиент REST API Sentinel Server (без GTK): вход, устройства, Hik-Connect, поток событий."""
 from __future__ import annotations
 
+import http.client
+import ipaddress
 import json
 import ssl
 import threading
@@ -11,10 +13,38 @@ import urllib.request
 API = "/api/v1"
 
 
+PLAIN_HTTP_SSL_REASONS = ("RECORD_LAYER_FAILURE", "WRONG_VERSION_NUMBER", "UNKNOWN_PROTOCOL", "HTTP_REQUEST",
+                          "PACKET_LENGTH_TOO_LONG")
+PLAIN_HTTP_HINT = ("Сервер работает без шифрования (HTTP). Укажите адрес с http://, например "
+                   "http://127.0.0.1:8765 — точный адрес показан в «Настройках Sentinel Server».")
+
+
 class RemoteError(RuntimeError):
-    def __init__(self, message, status=None):
+    def __init__(self, message, status=None, plain_http=False, tls_required=False):
         super().__init__(message)
         self.status = status
+        self.plain_http = plain_http       # https-запрос ушёл на сервер без TLS
+        self.tls_required = tls_required   # http-запрос ушёл на сервер с TLS (он оборвал соединение)
+
+
+def has_scheme(url: str) -> bool:
+    return "://" in (url or "")
+
+
+def _is_local_host(host):
+    host = (host or "").strip("[]").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_plain_http_error(reason):
+    return isinstance(reason, ssl.SSLError) and (
+        getattr(reason, "reason", None) in PLAIN_HTTP_SSL_REASONS
+        or any(r in str(reason) for r in PLAIN_HTTP_SSL_REASONS))
 
 
 def normalize_server_url(url: str) -> str:
@@ -22,7 +52,9 @@ def normalize_server_url(url: str) -> str:
     if not url:
         raise ValueError("Укажите адрес сервера")
     if "://" not in url:
-        url = "https://" + url
+        # сервер на этом же компьютере по умолчанию слушает 127.0.0.1 без TLS
+        host = url.split("/", 1)[0].rsplit(":", 1)[0] if not url.startswith("[") else url[1:url.find("]")]
+        url = ("http://" if _is_local_host(host) else "https://") + url
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise ValueError("Адрес сервера: https://хост:порт")
@@ -69,10 +101,21 @@ class ServerClient:
             raise RemoteError(message or f"Сервер ответил HTTP {exc.code}", exc.code) from exc
         except urllib.error.URLError as exc:
             reason = exc.reason
+            if _is_plain_http_error(reason):
+                raise RemoteError(PLAIN_HTTP_HINT, plain_http=True) from exc
             if isinstance(reason, ssl.SSLCertVerificationError):
                 raise RemoteError("Сертификат сервера не прошёл проверку. Установите сертификат или "
                                   "укажите файл CA.") from exc
             raise RemoteError(f"Нет связи с сервером: {reason}") from exc
+        except (http.client.RemoteDisconnected, http.client.BadStatusLine, ConnectionResetError) as exc:
+            if url.startswith("http://"):
+                raise RemoteError("Сервер оборвал соединение: вероятно, он работает с шифрованием — укажите "
+                                  "адрес с https://", tls_required=True) from exc
+            raise RemoteError(f"Нет связи с сервером: {exc}") from exc
+        except ssl.SSLError as exc:
+            if _is_plain_http_error(exc):
+                raise RemoteError(PLAIN_HTTP_HINT, plain_http=True) from exc
+            raise RemoteError(f"Ошибка TLS: {exc}") from exc
         except TimeoutError as exc:
             raise RemoteError("Сервер не ответил вовремя") from exc
         return json.loads(raw or b"{}")
@@ -113,6 +156,27 @@ class ServerClient:
 
     def events(self, limit=200):
         return self.request("GET", "/events", params={"limit": limit})["items"]
+
+    # ------------------------------------------------------------ охрана
+    def arming(self):
+        return self.request("GET", "/arming")
+
+    def set_arming(self, scope, armed, target=0, targets=None):
+        return self.request("POST", "/arming", {"scope": scope, "armed": bool(armed), "target": target,
+                                                "targets": targets})
+
+    # ------------------------------------------------------------ виды
+    def views(self):
+        return self.request("GET", "/views")
+
+    def create_view(self, name, public, layout):
+        return self.request("POST", "/views", {"name": name, "public": bool(public), "layout": layout})["id"]
+
+    def update_view(self, view_id, name=None, public=None, layout=None):
+        return self.request("PUT", f"/views/{int(view_id)}", {"name": name, "public": public, "layout": layout})
+
+    def delete_view(self, view_id):
+        return self.request("DELETE", f"/views/{int(view_id)}")
 
     # ------------------------------------------------------------ Hik-Connect
     def hikconnect_accounts(self):

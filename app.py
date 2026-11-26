@@ -44,6 +44,8 @@ except ImportError as exc:
         "Установите gir1.2-gtk-4.0 и gir1.2-gstreamer-1.0."
     ) from exc
 
+import sentinel_alarms as alarms
+import sentinel_archive as archive
 import sentinel_devmgmt as devmgmt
 import sentinel_cloudstream as cloudstream
 import sentinel_hikconnect as hikconnect
@@ -51,7 +53,16 @@ import sentinel_storage as storage
 import sentinel_widgets as W
 from sentinel_mainwin import MainWindowMixin
 from sentinel_services import ServicesMixin
+from sentinel_tilebar import TileBarMixin
+from sentinel_board import BoardMixin
+from sentinel_viewshare import ViewShareMixin
+from sentinel_alarmmap import AlarmMapMixin
+from sentinel_accesscenter import AccessCenterMixin
+from sentinel_ops_ui import OpsMixin
+from sentinel_wall_ui import WallEvidenceMixin
 import sentinel_layouts as layouts
+import sentinel_protocols as protocols
+import sentinel_decoding as decoding
 import sentinel_shell as shell
 from sentinel_protocols import (
     FfmpegJob,
@@ -109,7 +120,7 @@ def make_label(text: str, css_class: str | None = None):
     return label
 
 
-class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
+class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixin, OpsMixin, WallEvidenceMixin, MainWindowMixin, ServicesMixin, TileBarMixin, Gtk.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Sentinel — видеонаблюдение")
         self.set_resizable(True)
@@ -126,6 +137,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         self.allow_insecure_basic = settings.get("allow_insecure_basic") == "1"
         set_allow_insecure_basic(self.allow_insecure_basic)
         self.streams = {}
+        self.decoding_backend, self.decoding_status = decoding.apply()
         self.maximized_slot = None
         self.monitor_windows = []
         self.monitor_sequence = 0
@@ -516,9 +528,14 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         now = datetime.now().replace(second=0, microsecond=0)
         self.archive_start = Gtk.Entry(text=(now - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M"))
         self.archive_end = Gtk.Entry(text=now.strftime("%Y-%m-%d %H:%M"))
+        self.archive_scope = Gtk.DropDown.new_from_strings(
+            ["Только этот канал", "Все каналы регистратора", "Все камеры области"])
+        self.archive_record_type = Gtk.DropDown.new_from_strings(list(archive.RECORD_TYPES.values()))
         self._field(form, "Канал", self.archive_device, 0)
-        self._field(form, "Начало (локальное время)", self.archive_start, 1)
-        self._field(form, "Конец (локальное время)", self.archive_end, 2)
+        self._field(form, "Где искать", self.archive_scope, 1)
+        self._field(form, "Тип записи", self.archive_record_type, 2)
+        self._field(form, "Начало (локальное время)", self.archive_start, 3)
+        self._field(form, "Конец (локальное время)", self.archive_end, 4)
         sidebar.append(form)
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         actions.set_halign(Gtk.Align.END)
@@ -633,7 +650,8 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         self.map_choice.connect("notify::selected", lambda *_: self._render_map())
         controls.append(make_label("Карта"))
         controls.append(self.map_choice)
-        controls.append(self._button("＋ Точка камеры", self.add_map_hotspot))
+        controls.append(self._button("＋ Точка", self.add_map_hotspot))
+        controls.append(self._button("🛡 Охрана точек карты", self._map_arming_menu))
         controls.append(self._button("Удалить карту", self.delete_map))
         page.append(controls)
         self.map_status = make_label("Добавьте изображение плана или карты, затем разместите точки камер.", "muted")
@@ -653,7 +671,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         page.append(self.map_canvas)
         return page
 
-    def _access_page(self):
+    def _access_log_page(self):
         page = self._page("ДВЕРИ И СОБЫТИЯ", "Контроль доступа", "Управление дверью и журнал событий контроллера")
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         panel.add_css_class("section-card")
@@ -709,45 +727,16 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             self.map_choice.set_selected(min(self.map_choice.get_selected(), len(self.maps) - 1))
         self._render_map()
 
-    def _render_map(self):
-        if not hasattr(self, "map_picture"):
-            return
-        self._clear_box(self.map_points)
+    def _map_arming_menu(self, *_args):
         selected = self.map_choice.get_selected()
         if selected == Gtk.INVALID_LIST_POSITION or selected >= len(getattr(self, "maps", [])):
-            self.map_picture.set_paintable(None)
-            self.map_status.set_text("Добавьте изображение плана или карты, затем разместите точки камер.")
             return
-        current = self.maps[selected]
-        image_path = Path(current["image_path"])
-        if not image_path.is_file():
-            self.map_picture.set_paintable(None)
-            self.map_status.set_text(f"Файл карты не найден: {image_path}")
+        ids = sorted({p["device_id"] for p in self._map_hotspots(self.maps[selected]["id"])})
+        items = self.arming_menu_items(ids, f"карта «{self.maps[selected]['name']}»")
+        if not items:
+            self.notify("На карте нет точек или нет прав на постановку на охрану")
             return
-        try:
-            self.map_picture.set_filename(str(image_path))
-        except GLib.Error as exc:
-            self.map_status.set_text(f"Не удалось открыть карту: {exc.message}")
-            return
-        with database() as db:
-            points = [dict(row) for row in db.execute("""SELECT h.*,d.name AS camera_name,d.host,d.channel
-                FROM map_hotspots h JOIN devices d ON d.id=h.device_id WHERE h.map_id=? ORDER BY h.id""", (current["id"],))]
-        self.map_status.set_text(f"{current['name']} · точек камер: {len(points)} · щёлкните точку для live view")
-        GLib.idle_add(self._place_map_points, points)
-
-    def _place_map_points(self, points):
-        width = max(1, self.map_canvas.get_width())
-        height = max(1, self.map_canvas.get_height())
-        for point in points:
-            marker = Gtk.Button(label="● " + point["label"])
-            marker.set_tooltip_text(f"{point['camera_name']} · {point['host']} CH {point['channel']}\nПравый клик — удалить точку")
-            marker.connect("clicked", lambda _b, p=point: self.open_live_dialog(next((d for d in self.devices if d["id"] == p["device_id"]), None)))
-            context = Gtk.GestureClick()
-            context.set_button(3)
-            context.connect("released", lambda _g, _n, _x, _y, p=point: self.delete_map_hotspot(p["id"]))
-            marker.add_controller(context)
-            self.map_points.put(marker, point["x"] * width / 100.0, point["y"] * height / 100.0)
-        return GLib.SOURCE_REMOVE
+        W.popover_menu(self.map_choice, items)
 
     def add_map(self, *_args):
         chooser = Gtk.FileChooserNative.new("Выберите изображение карты", self, Gtk.FileChooserAction.OPEN,
@@ -780,45 +769,6 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         dialog.connect("response", response_cb)
         dialog.present()
         chooser.destroy()
-
-    def add_map_hotspot(self, *_args):
-        selected = self.map_choice.get_selected()
-        if selected == Gtk.INVALID_LIST_POSITION or selected >= len(getattr(self, "maps", [])):
-            self.notify("Сначала выберите или добавьте карту")
-            return
-        if not self.devices:
-            self.notify("Сначала добавьте камеры в раздел «Устройства»")
-            return
-        dialog = Gtk.Dialog(title="Точка камеры на карте", transient_for=self, modal=True)
-        dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
-        dialog.add_button("Добавить", Gtk.ResponseType.ACCEPT)
-        form = Gtk.Grid(column_spacing=10, row_spacing=9, margin_top=14, margin_bottom=14,
-                        margin_start=14, margin_end=14)
-        camera = Gtk.DropDown.new_from_strings([f"{d['name']} · {d['host']} CH {d['channel']}" for d in self.devices])
-        label = Gtk.Entry(placeholder_text="Название точки")
-        xpos = Gtk.SpinButton.new_with_range(0, 100, 1); xpos.set_value(50)
-        ypos = Gtk.SpinButton.new_with_range(0, 100, 1); ypos.set_value(50)
-        self._field(form, "Камера", camera, 0); self._field(form, "Подпись", label, 1)
-        self._field(form, "Позиция X, %", xpos, 2); self._field(form, "Позиция Y, %", ypos, 3)
-        dialog.get_content_area().append(form)
-        def response(dlg, result):
-            if result == Gtk.ResponseType.ACCEPT:
-                if camera.get_selected() == Gtk.INVALID_LIST_POSITION:
-                    self.notify("Выберите камеру")
-                    return
-                device = self.devices[camera.get_selected()]
-                title = label.get_text().strip() or device["name"]
-                with database() as db:
-                    db.execute("INSERT INTO map_hotspots(map_id,device_id,label,x,y) VALUES(?,?,?,?,?)",
-                               (self.maps[selected]["id"], device["id"], title, xpos.get_value() / 100, ypos.get_value() / 100))
-                self._render_map()
-            dlg.close()
-        dialog.connect("response", response); dialog.present()
-
-    def delete_map_hotspot(self, hotspot_id):
-        with database() as db:
-            db.execute("DELETE FROM map_hotspots WHERE id=?", (hotspot_id,))
-        self._render_map()
 
     def delete_map(self, *_args):
         selected = self.map_choice.get_selected()
@@ -1282,15 +1232,19 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             pane.add_controller(scroll)
             zoom_drag = Gtk.GestureDrag()
             # drag-end передаёт только смещение; начальная точка берётся из get_start_point().
-            zoom_drag.connect("drag-end", lambda g, dx, dy, i=index, p=pane: self._digital_zoom_region(
+            zoom_drag.connect("drag-end", lambda g, dx, dy, i=index, p=pane: self._tile_drag_end(
                 i, *g.get_start_point()[1:], dx, dy, p.get_width(), p.get_height()))
             pane.add_controller(zoom_drag)
+            tools = self._build_tile_toolbar(index, pane)
             aspect_frame.set_child(pane)
             col, row, colspan, rowspan = cells[index]
             self.camera_grid.attach(aspect_frame, col, row, colspan, rowspan)
             self.video_slots.append({"pane": pane, "aspect_frame": aspect_frame,
                                      "aspect_ratio": aspect_ratio, "picture": picture, "placeholder": placeholder,
-                                     "caption": caption, "device": None})
+                                     "caption": caption, "device": None, **tools})
+        self._tile_ptz_slots().intersection_update(range(self.layout_count))
+        for index in [i for i in self._talk_sessions() if i >= self.layout_count]:
+            self.stop_talk(index)
         for index, state in self.streams.items():
             if index >= self.layout_count:
                 continue
@@ -1300,6 +1254,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
                 f"● LIVE   {state['device']['name']}  ·  {state['device']['host']} CH {state['device']['channel']}")
             slot["placeholder"].set_visible(False)
             slot["picture"].set_paintable(paintables.get(index))
+            self._sync_tile_toolbar(index)
         for slot, entry in list(getattr(self, "slot_resources", {}).items()):
             if slot < self.layout_count:
                 self._place_resource(slot, entry)
@@ -1570,7 +1525,29 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         device = state["device"]
         self.notify(f"{device['name']}\n{device['host']} · канал {device['channel']}\n"
                     f"Поток: {'дополнительный' if device.get('stream') == 'sub' else 'основной'}\n"
-                    f"Адрес RTSP: {device['host']}:{device['rtsp_port']}")
+                    f"Адрес RTSP: {device['host']}:{device['rtsp_port']}\n"
+                    f"Декодер: {decoding.decoder_title(decoding.pipeline_decoder(state['pipeline']))}")
+
+    def active_decoders(self):
+        """[(номер окна, имя камеры, декодер)] для открытых окон видео."""
+        return [(slot + 1, state["device"].get("name", ""), decoding.pipeline_decoder(state["pipeline"]))
+                for slot, state in sorted(self.streams.items())]
+
+    def apply_decoding(self, restart=True):
+        """Применить настройку декодирования; живые окна переоткрываются, чтобы взять новый декодер."""
+        self.decoding_backend, self.decoding_status = decoding.apply()
+        restarted = 0
+        if restart:
+            for slot, state in list(self.streams.items()):
+                if state.get("playback") or state.get("cloud"):
+                    continue
+                try:
+                    self._start_preview(slot, state["base_device"], state["credentials"],
+                                        stream_override=state["device"].get("stream"))
+                    restarted += 1
+                except Exception as exc:
+                    self.notify(str(exc), error=True)
+        return restarted
 
     def _digital_zoom(self, slot, direction):
         state = self.streams.get(slot)
@@ -2506,6 +2483,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
                 self.alarm_response.close()
             except Exception:
                 pass
+        self.stop_talk()
         self.stop_all_streams()
         for window in list(self.monitor_windows):
             window.close()
@@ -2560,6 +2538,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             self.notify(f"Безопасно перенесено паролей устройств: {migrated}")
         self.restore_saved_windows()
         self.sync_event_subscriptions()
+        self._start_patrol_timer()
         self._recorder_tick()
         self.check_all_devices(quiet=True)
         return GLib.SOURCE_REMOVE
@@ -2803,79 +2782,103 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
     def _search_archive(self, device, credentials):
         start_text = credentials.pop("start")
         end_text = credentials.pop("end")
+        scope = ("channel", "device", "area")[min(2, self.archive_scope.get_selected())]
+        record_type = list(archive.RECORD_TYPES)[min(len(archive.RECORD_TYPES) - 1,
+                                                     self.archive_record_type.get_selected())]
+        targets = []
+        for camera in archive.scope_devices(self.devices, device, scope) or [device]:
+            same_device = camera["host"] == device["host"] and camera.get("sdk_port") == device.get("sdk_port")
+            targets.append((camera, dict(credentials) if same_device else self._get_device_credentials(camera)))
         token = uuid.uuid4().hex
         self.archive_query_token = token
         self.archive_matches = []
         self._update_archive_timeline_marks()
         self._clear_box(self.archive_results)
-        self.archive_results.append(make_label("Идёт поиск…", "muted"))
+        self.archive_results.append(make_label(f"Идёт поиск… камер: {len(targets)}", "muted"))
         threading.Thread(target=self._archive_search_worker,
-            args=(device, credentials, start_text, end_text, token), daemon=True).start()
+            args=(targets, start_text, end_text, record_type, token), daemon=True).start()
 
-    def _archive_search_worker(self, device, credentials, start_text, end_text, token):
+    def _archive_search_worker(self, targets, start_text, end_text, record_type, token):
         try:
-            start = datetime.fromisoformat(start_text).astimezone().isoformat(timespec="seconds")
-            end = datetime.fromisoformat(end_text).astimezone().isoformat(timespec="seconds")
+            start = datetime.fromisoformat(start_text).astimezone()
+            end = datetime.fromisoformat(end_text).astimezone()
             if end <= start:
                 raise ValueError("Конец интервала должен быть позже начала")
-            if device["protocol"] != "hikvision":
-                raise ValueError("Поиск файлов доступен для устройств Hikvision с ISAPI")
-            track = int(device["channel"]) * 100 + 1
-            query = (f"<CMSearchDescription><searchID>{uuid.uuid4()}</searchID><trackList><trackID>{track}</trackID></trackList>"
-                f"<timeSpanList><timeSpan><startTime>{start}</startTime><endTime>{end}</endTime></timeSpan></timeSpanList>"
-                "<maxResults>64</maxResults><searchResultPosition>0</searchResultPosition></CMSearchDescription>").encode()
-            url = f"http://{device['host']}:{device.get('http_port', 80)}/ISAPI/ContentMgmt/search"
-            opener = authenticated_opener(url, credentials["username"], credentials["password"])
-            request = urllib.request.Request(url, data=query, method="POST", headers={"Content-Type": "application/xml"})
-            with opener.open(request, timeout=12) as response:
-                xml = ET.fromstring(response.read())
-            matches = []
-            for item in xml.iter():
-                if item.tag.rsplit("}", 1)[-1] != "searchMatchItem":
+            results, problems = [], []
+            for device, credentials in targets:
+                if token != self.archive_query_token:
+                    return
+                if device.get("protocol") != "hikvision":
+                    problems.append(f"{device['name']}: поиск доступен для Hikvision с ISAPI")
                     continue
-                values = {node.tag.rsplit("}", 1)[-1]: (node.text or "").strip() for node in item.iter()}
-                uri = values.get("playbackURI")
-                if uri:
-                    clip_start = values.get("startTime", "")
-                    clip_end = values.get("endTime", "")
-                    try:
-                        if datetime.fromisoformat(clip_end.replace("Z", "+00:00")).astimezone() <= datetime.fromisoformat(
-                                clip_start.replace("Z", "+00:00")).astimezone():
-                            continue
-                    except ValueError:
-                        continue
-                    matches.append({"start": clip_start, "end": clip_end, "uri": uri,
-                                    "device": device, "credentials": credentials})
-            GLib.idle_add(self._show_archive_results, token, matches)
+                if not credentials or not credentials.get("username"):
+                    problems.append(f"{device['name']}: нет сохранённого пароля")
+                    continue
+                try:
+                    found = self.isapi_search_recordings(device, credentials, start, end, record_type=record_type)
+                except Exception as exc:
+                    problems.append(f"{device['name']}: {exc}")
+                    continue
+                results.append((device, [{"start": s.isoformat(timespec="seconds"), "end": e.isoformat(timespec="seconds"),
+                                          "uri": uri, "kind": kind, "device": device, "credentials": credentials}
+                                         for s, e, uri, kind in found if uri]))
+            if problems and not any(items for _d, items in results):
+                raise ValueError("; ".join(problems[:3]))
+            GLib.idle_add(self._show_archive_results, token, results, problems)
         except Exception as exc:
             GLib.idle_add(self._archive_search_error, token, str(exc))
 
-    def _show_archive_results(self, token, matches):
+    def _show_archive_results(self, token, results, problems=()):
         if token != self.archive_query_token:
             return GLib.SOURCE_REMOVE
-        self.archive_matches = matches
+        groups = archive.group_by_camera(results)
+        self.archive_matches = [m for _device, items in groups for m in items]
+        self.archive_groups = groups
         self._clear_box(self.archive_results)
-        if not matches:
+        if problems:
+            warning = make_label("Не все камеры проверены: " + "; ".join(problems[:3]), "muted")
+            warning.set_wrap(True)
+            self.archive_results.append(warning)
+        if not groups:
             self.archive_results.append(make_label("Записей на выбранном интервале не найдено.", "muted"))
             self._update_archive_timeline_marks()
             return GLib.SOURCE_REMOVE
-        matches.sort(key=lambda item: self._archive_datetime(item["start"]))
-        for match in matches:
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-            row.set_margin_top(5)
-            row.set_margin_bottom(5)
-            label = make_label(
-                f"{self._archive_datetime(match['start']).strftime('%m-%d %H:%M:%S')}  –  "
-                f"{self._archive_datetime(match['end']).strftime('%H:%M:%S')}", "muted")
-            label.set_hexpand(True)
-            row.append(label)
-            play = Gtk.Button(label="▶ Просмотр")
-            play.connect("clicked", lambda _button, m=match: self._play_search_match(m))
-            row.append(play)
-            export = Gtk.Button(label="Сохранить")
-            export.connect("clicked", lambda _button, m=match: self._export_search_match(m))
-            row.append(export)
-            self.archive_results.append(row)
+        for device, matches in groups:
+            inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            expander = Gtk.Expander(label=f"{device['name']}  ·  {len(matches)}")
+            expander.set_expanded(len(groups) <= 3)
+            expander.set_child(inner)
+            head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            expander.set_hexpand(True)
+            head.append(expander)
+            export_all = Gtk.Button(label="⇩ Все")
+            export_all.set_tooltip_text("Экспортировать все записи камеры одним пакетом")
+            export_all.set_valign(Gtk.Align.START)
+            export_all.connect("clicked", lambda _b, d=device, m=matches: self.export_evidence(d, m))
+            head.append(export_all)
+            self.archive_results.append(head)
+            for match in matches:
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                row.set_margin_top(3)
+                row.set_margin_bottom(3)
+                row.set_margin_start(12)
+                dot = make_label("●", f"rec-{match['kind']}")
+                dot.set_tooltip_text(archive.RECORD_TYPES.get(match["kind"], ""))
+                row.append(dot)
+                label = make_label(
+                    f"{self._archive_datetime(match['start']).strftime('%m-%d %H:%M:%S')}  –  "
+                    f"{self._archive_datetime(match['end']).strftime('%H:%M:%S')}", "muted")
+                label.set_hexpand(True)
+                row.append(label)
+                play = Gtk.Button(label="▶")
+                play.set_tooltip_text("Просмотр")
+                play.connect("clicked", lambda _button, m=match: self._play_search_match(m))
+                row.append(play)
+                export = Gtk.Button(label="⇩")
+                export.set_tooltip_text("Экспорт: видео MP4, плеер, контрольные суммы")
+                export.connect("clicked", lambda _button, m=match: self._export_search_match(m))
+                row.append(export)
+                inner.append(row)
         self._update_archive_timeline_marks()
         return GLib.SOURCE_REMOVE
 
@@ -3133,20 +3136,70 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         self._set_archive_timeline_position()
 
     def _export_search_match(self, match):
+        self.export_evidence(match["device"], [match])
+
+    def export_evidence(self, device, matches):
+        """Пакет доказательств: MP4 по каждой записи, index.html-плеер, manifest.json, SHA256SUMS и ZIP."""
+        if not self.session.can("playback"):
+            self.notify("Нет прав на экспорт записей", error=True)
+            return
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
             self.notify("Для экспорта записи установите FFmpeg")
             return
-        uri = self._authenticate_device_uri(match["uri"], match["device"], match["credentials"])
-        folder = Path.home() / "Videos" / "Sentinel"
-        folder.mkdir(parents=True, exist_ok=True)
-        filename = folder / datetime.now().strftime("export_%Y%m%d_%H%M%S.mkv")
-        try:
-            FfmpegJob(ffmpeg, uri, str(filename), on_error=self._ffmpeg_failed)
-        except OSError as exc:
-            self.notify(f"Не удалось запустить FFmpeg: {exc}")
+        if not matches:
             return
-        self.notify("Экспорт записи начат")
+        first = self._archive_datetime(matches[0]["start"])
+        root = getattr(self, "record_folder", Path.home() / "Videos" / "Sentinel") / "Evidence"
+        folder = archive.package_folder(root, device, first)
+        folder.mkdir(parents=True, exist_ok=True)
+        clips = []
+        for index, match in enumerate(matches, 1):
+            start, end = self._archive_datetime(match["start"]), self._archive_datetime(match["end"])
+            camera = match["device"]
+            clips.append({"file": archive.clip_filename(index, camera, start), "camera": camera["name"],
+                          "host": camera["host"], "channel": camera["channel"], "start": start, "end": end,
+                          "kind": match.get("kind", "continuous"), "_match": match})
+        self.notify(f"Экспорт начат: {len(clips)} зап. → {folder}")
+        self._export_next_clip(ffmpeg, folder, clips, 0)
+
+    def _export_next_clip(self, ffmpeg, folder, clips, index):
+        if index >= len(clips):
+            public = [{k: v for k, v in c.items() if not k.startswith("_")} for c in clips]
+            try:
+                manifest, bundle = archive.finalize_package(folder, public, self.session.username)
+            except OSError as exc:
+                self.notify(f"Экспорт: не удалось записать пакет: {exc}", error=True)
+                return
+            alarms.log_operation(self.session.username, "Экспорт записей", str(folder),
+                                 f"клипов: {len(manifest['clips'])}")
+            if not manifest["clips"]:
+                self.notify("Экспорт не удался: устройство не отдало видео", error=True)
+            else:
+                self.notify(f"Экспорт готов: {len(manifest['clips'])} из {len(clips)} · "
+                            f"{bundle or folder}")
+                self.offer_add_to_case(folder, "export", f"Экспорт {public[0]['camera']} "
+                                       f"{public[0]['start']:%d.%m.%Y %H:%M}", {"clips": len(manifest["clips"])})
+            return
+        clip = clips[index]
+        match = clip["_match"]
+        try:
+            uri = self._authenticate_device_uri(match["uri"], match["device"], match["credentials"])
+            duration = (clip["end"] - clip["start"]).total_seconds()
+            job = FfmpegJob(ffmpeg, uri, str(folder / clip["file"]), on_error=self._ffmpeg_failed,
+                            command=lambda list_path, out=folder / clip["file"], d=duration:
+                            archive.ffmpeg_export_command(ffmpeg, list_path, out, d))
+        except (OSError, ValueError) as exc:
+            self.notify(f"Экспорт {clip['camera']}: {exc}", error=True)
+            GLib.idle_add(self._export_next_clip, ffmpeg, folder, clips, index + 1)
+            return
+
+        def wait():
+            if job.poll() is None:
+                return GLib.SOURCE_CONTINUE
+            self._export_next_clip(ffmpeg, folder, clips, index + 1)
+            return GLib.SOURCE_REMOVE
+        GLib.timeout_add_seconds(1, wait)
 
     def _authenticate_device_uri(self, uri, device, credentials):
         parsed = urllib.parse.urlparse(uri)
@@ -3178,6 +3231,9 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         preview_device = dict(device)
         if stream_override is not None:
             preview_device["stream"] = stream_override
+        elif device["protocol"] == "hikvision" and playback:
+            # Архив NVR есть только у основного потока: tracks/X02 регистратор отклоняет (400).
+            preview_device["stream"] = protocols.archive_stream()
         elif device["protocol"] == "hikvision" and not playback and not direct_uri:
             preview_device["stream"] = self._desired_stream(slot_index)
         cloud = None
@@ -3187,11 +3243,16 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         else:
             uri = direct_uri or self._stream_url(preview_device, credentials, playback)
         sink = Gst.ElementFactory.make("appsink", f"sentinel-video-{slot_index}")
-        pipeline = Gst.ElementFactory.make("playbin", f"sentinel-player-{slot_index}")
+        archive = playback is not None or direct_uri is not None
+        pipeline = None
+        for factory in protocols.player_factories(archive):
+            pipeline = Gst.ElementFactory.make(factory, f"sentinel-player-{slot_index}")
+            if pipeline:
+                break
         if not sink or not pipeline:
             if cloud:
                 cloud.stop()
-            raise RuntimeError("GStreamer playbin/appsink недоступен. Установите GStreamer base/good plugins.")
+            raise RuntimeError("GStreamer playbin3/playbin/appsink недоступен. Установите GStreamer base/good plugins.")
         sink.set_property("emit-signals", True)
         sink.set_property("max-buffers", 1)
         sink.set_property("drop", True)
@@ -3238,6 +3299,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         if not state["playback"]:
             self._mark_view_dirty()
         self._update_stream_count()
+        self._sync_tile_toolbar(slot_index)
         if hasattr(self, "timeline"):
             self._load_timeline_segments()
 
@@ -3393,6 +3455,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             item["placeholder"].set_visible(True)
             item["caption"].set_text("")
             item["device"] = None
+            self._sync_tile_toolbar(slot)
         self._update_stream_count()
         return GLib.SOURCE_REMOVE
 
@@ -3429,6 +3492,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         if not getattr(self, "compact_audio_button", False):
             audio_label += " Звук"
         self.audio_button.set_label(audio_label)
+        self._sync_tile_toolbar(self.selected_slot)
 
     def toggle_recording(self):
         state = self.streams.get(self.selected_slot)
@@ -3440,6 +3504,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             recording.stop()
             state["recording"] = None
             self._set_record_button_label("● Запись")
+            self._sync_tile_toolbar(self.selected_slot)
             self.notify("Запись остановлена")
             return
         if state.get("cloud") is not None:
@@ -3458,6 +3523,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             self.notify(f"Не удалось запустить FFmpeg: {exc}")
             return
         self._set_record_button_label("■ Остановить запись")
+        self._sync_tile_toolbar(self.selected_slot)
         self.notify("Запись начата")
 
     def _ffmpeg_failed(self, code, details):
@@ -3638,6 +3704,7 @@ class MonitorWindow(SentinelWindow):
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key_pressed)
         self.add_controller(keys)
+        self._install_ptz_keys()
 
     def start_assignments(self, assignments, shared_credentials, use_substream=True):
         self.add_substream = use_substream
@@ -3687,6 +3754,7 @@ class MonitorWindow(SentinelWindow):
         if getattr(self, "assignment_source", 0):
             GLib.source_remove(self.assignment_source)
             self.assignment_source = 0
+        self.stop_talk()
         self.stop_all_streams()
         if self in self.parent_window.monitor_windows:
             self.parent_window.monitor_windows.remove(self)

@@ -47,7 +47,7 @@ Description: GTK video surveillance client
  Sentinel is a local Linux desktop client for supported video surveillance devices.
 Depends: python3, python3-gi, python3-gi-cairo, gir1.2-gtk-4.0, gir1.2-gstreamer-1.0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-libav, libsecret-tools
 Recommends: ffmpeg, python3-venv
-Suggests: gir1.2-webkit-6.0
+Suggests: gir1.2-webkit-6.0, mesa-va-drivers, intel-media-va-driver, vainfo
 EOF
 
 dpkg-deb --build --root-owner-group "$PACKAGE_ROOT" "$OUTPUT"

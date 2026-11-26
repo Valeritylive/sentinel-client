@@ -77,6 +77,7 @@ class ViewTab:
     mapping: list = field(default_factory=list)
     view_id: int | None = None
     dirty: bool = False
+    server_view_id: int | None = None   # вид на сервере Sentinel (приватный или публичный)
 
     @property
     def title(self):

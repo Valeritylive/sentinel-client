@@ -45,6 +45,7 @@ expander title { padding: 6px 4px; }
 .status-online { color: #3fbf6f; }
 .cam-idle { color: #6c6e74; }
 .cam-active { color: #3fbf6f; }
+.dev-online { color: #3fbf6f; }
 .status-offline { color: #8b8d93; }
 .status-error { color: #e8232c; }
 .shortcut { background: #2a2b30; border: none; border-radius: 4px; padding: 8px 10px; margin: 2px 6px; }
@@ -53,6 +54,23 @@ expander title { padding: 6px 4px; }
 .camera-tile { background: #26272b; border: 1px solid #141517; border-radius: 0; }
 .camera-tile:hover { border-color: #55565c; }
 .camera-tile.selected { border: 2px solid #e8232c; }
+.rec-continuous { color: #2985e0; } .rec-motion { color: #edc733; } .rec-alarm { color: #e03333; }
+.rec-smart { color: #9e66e6; } .rec-local { color: #40bf73; }
+.map-point { background: alpha(#1b1c20, 0.85); color: #e8e8ea; border: 1px solid #3a3b40; border-radius: 12px; padding: 1px 8px; }
+.map-point.map-door { border-color: #3b8fd9; } .map-point.map-input { border-color: #d9a43b; }
+.map-point.map-disarmed { color: #8d8f96; background: alpha(#1b1c20, 0.55); border: 1px dashed #6a6c72; }
+.map-point.map-alarm { border-color: #e8232c; }
+.map-point.map-alarm-on { background: #e8232c; color: #fff; }
+.board-card { background: #232428; border: 1px solid #2f3035; border-radius: 6px; padding: 12px; }
+.board-card button, .board-card button label { color: #cfd3da; }
+.tile-toolbar { background: alpha(#000, 0.6); border-radius: 4px; padding: 1px; }
+.tile-tool { color: #e6e6e6; min-width: 24px; min-height: 22px; padding: 1px 4px; font-size: 11px; }
+.tile-tool:hover { background: alpha(#fff, 0.14); }
+.tile-tool-on { color: #fff; background: #e8232c; }
+.tile-ptz-pad { background: alpha(#000, 0.5); border-radius: 6px; padding: 3px; }
+.tile-ptz-label { color: #bbb; font-size: 10px; }
+.tile-ptz-pad button { background: alpha(#000, 0.35); background-image: none; color: #eee; border: none; box-shadow: none; min-width: 24px; min-height: 22px; padding: 0; }
+.tile-ptz-pad button:hover { background: alpha(#fff, 0.2); }
 .tile-caption { color: #eee; font-size: 11px; background: alpha(#000, 0.45); padding: 1px 6px; border-radius: 2px; }
 .playback-bar { background: #1b1c1f; border-top: 1px solid #000; padding: 4px 8px; }
 .mode-button { background: #26272b; border: none; border-radius: 3px; padding: 2px 10px; }
@@ -79,6 +97,23 @@ expander title { padding: 6px 4px; }
 .status-badge.ok { background: alpha(#3fbf6f, 0.18); color: #6fd896; }
 .status-badge.bad { background: alpha(#e8232c, 0.2); color: #ff6b70; }
 .status-badge.unknown { background: #2e2f34; color: #9a9ca3; }
+.status-badge.warn { background: alpha(#f0a020, 0.2); color: #f5bf55; }
+.status-badge.muted { background: #2a2b30; color: #8d8f96; }
+.warning-text { color: #f5bf55; font-weight: bold; }
+.door-card { background: #202126; border: 1px solid #34363c; border-left: 4px solid #6b6d74;
+             border-radius: 6px; padding: 8px 10px; }
+.door-card.door-open { border-left-color: #3fbf6f; }
+.door-card.door-closed { border-left-color: #4a8fe0; }
+.door-card.door-unknown { border-left-color: #6b6d74; }
+.door-state { font-weight: bold; }
+.list-row { padding: 6px 8px; border-radius: 4px; background: transparent; }
+.list-row label { color: #d7dae0; }
+.list-row:hover { background: #2a2c31; }
+.wall-screen { background: #1b1c20; border: 2px solid #3a3c43; border-radius: 6px; padding: 6px; }
+.wall-alarm-screen { border-color: #e8232c; }
+.wall-cell { background: #0d0e10; color: #cfd3da; border: 1px solid #2c2e33; border-radius: 2px;
+             min-height: 40px; font-size: 11px; }
+.wall-cell:hover { border-color: #e8232c; }
 .table-head { color: #8b8d93; font-weight: 600; padding: 6px 4px; border-bottom: 1px solid #333; }
 .table-cell { padding: 6px 4px; border-bottom: 1px solid #2a2b2f; }
 .system-tabs button { background: transparent; border: none; border-radius: 0; padding: 8px 12px; }
@@ -135,6 +170,17 @@ def button(text, callback=None, css=None, tooltip=None, flat=False):
         widget.set_tooltip_text(tooltip)
     if flat:
         widget.set_has_frame(False)
+    if callback:
+        widget.connect("clicked", lambda *_: callback())
+    return widget
+
+
+def list_row(text, callback=None):
+    """Строка списка (маршруты, дела): текст слева, хорошо читаемый."""
+    widget = Gtk.Button()
+    widget.add_css_class("list-row")
+    widget.set_has_frame(False)
+    widget.set_child(label(text))
     if callback:
         widget.connect("clicked", lambda *_: callback())
     return widget
@@ -421,10 +467,11 @@ class Timeline(Gtk.DrawingArea):
 
     HEIGHT = 46
 
-    def __init__(self, on_seek, on_view_changed=None, label_text=""):
+    def __init__(self, on_seek, on_view_changed=None, label_text="", on_marker=None):
         super().__init__()
         self.model = tl.TimelineModel()
         self.on_seek = on_seek
+        self.on_marker = on_marker
         self.on_view_changed = on_view_changed
         self.label_text = label_text
         self.set_hexpand(True)
@@ -453,8 +500,14 @@ class Timeline(Gtk.DrawingArea):
         moment = self.model.time_at(x, self.get_width())
         segment = self.model.segment_at(moment)
         tip = tl.format_position(moment)
-        if segment:
-            tip += f"\nЗапись: {segment.start:%H:%M:%S}–{segment.end:%H:%M:%S}"
+        marker = self.model.marker_near(x, self.get_width())
+        if marker is not None:
+            event = (marker.payload or {}).get("event") or {} if isinstance(marker.payload, dict) else {}
+            tip = (f"{tl.KIND_TITLES.get(marker.kind, 'Событие')} · {marker.moment:%H:%M:%S}\n"
+                   f"{event.get('title', '')}  {event.get('device_name', '')}\nЩелчок — перейти и открыть карточку")
+        elif segment:
+            tip += (f"\n{tl.KIND_TITLES.get(segment.kind, 'Запись')}: "
+                    f"{segment.start:%H:%M:%S}–{segment.end:%H:%M:%S}")
         self.set_tooltip_text(tip)
 
     def _drag_begin(self, _gesture, x, _y):
@@ -473,6 +526,10 @@ class Timeline(Gtk.DrawingArea):
             return
         self._drag_center = None
         if abs(dx) < 4:
+            marker = self.model.marker_near(self._drag_x + dx, self.get_width())
+            if marker is not None and self.on_marker:
+                self.on_marker(marker)
+                return
             moment = self.model.time_at(self._drag_x + dx, self.get_width())
             if self.on_seek:
                 self.on_seek(moment)
@@ -510,12 +567,34 @@ class Timeline(Gtk.DrawingArea):
         cr.set_source_rgb(0.15, 0.155, 0.17)
         cr.rectangle(0, bar_top, width, bar_height)
         cr.fill()
-        for segment in model.visible_segments():
+        visible = model.visible_segments()
+        # Непрерывная запись снизу, записи по движению/тревоге/событию поверх неё.
+        for segment in sorted((s for s in visible if not s.is_marker),
+                              key=lambda s: 0 if s.kind in ("continuous", "local") else 1):
             x1 = model.x_for(segment.start, width)
             x2 = max(x1 + 1.5, model.x_for(segment.end, width))
             cr.set_source_rgb(*tl.SEGMENT_COLORS.get(segment.kind, tl.SEGMENT_COLORS["continuous"]))
-            top = bar_top if segment.kind in ("continuous", "local") else bar_top - 3
-            cr.rectangle(x1, top, x2 - x1, bar_height if segment.kind in ("continuous", "local") else 4)
+            if segment.kind == "local":
+                cr.rectangle(x1, bar_top + bar_height - 3, x2 - x1, 3)
+            else:
+                cr.rectangle(x1, bar_top, x2 - x1, bar_height)
+            cr.fill()
+        for segment in model.segments:  # маркеры событий: флажок над полосой
+            if not segment.is_marker or (model.filter != "all" and segment.kind != model.filter):
+                continue
+            moment = segment.moment
+            if not model.start <= moment <= model.end:
+                continue
+            x = int(model.x_for(moment, width)) + 0.5
+            cr.set_source_rgb(*tl.SEGMENT_COLORS.get(segment.kind, tl.SEGMENT_COLORS["event"]))
+            cr.set_line_width(1)
+            cr.move_to(x, bar_top - 1)
+            cr.line_to(x, bar_top + bar_height)
+            cr.stroke()
+            cr.move_to(x - 4, bar_top - 8)
+            cr.line_to(x + 4, bar_top - 8)
+            cr.line_to(x, bar_top - 2)
+            cr.close_path()
             cr.fill()
         if self.label_text:
             cr.set_source_rgb(1, 1, 1)

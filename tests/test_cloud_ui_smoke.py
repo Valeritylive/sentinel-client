@@ -112,6 +112,112 @@ class CloudUiSmoke(unittest.TestCase):
         link.disconnect(forget=True)
         self.assertFalse(link.connected)
 
+    def test_server_link_cluster_failover(self):
+        import sentinel_cluster as cluster
+        security.ensure_admin("Adm1n-pass!")
+        nodes = {}
+        for role in ("primary", "standby"):
+            engines = []
+
+            def new_engine(engines=engines):
+                engines.append(engine_mod.Engine(receive_events=False, recording_enabled=False))
+                return engines[-1]
+
+            server = server_mod.make_server("127.0.0.1", 0, new_engine())
+            threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+
+            def down(_method, _path):
+                raise OSError("connection refused")
+
+            url = f"http://127.0.0.1:{server.server_address[1]}"
+            config = {"role": role, "peer_url": "http://127.0.0.1:1", "key": "k" * 64, "heartbeat": 5,
+                      "failover": 30, "node": role}
+            node = server_mod.attach_cluster(server, config, new_engine, transport=down, background=False)
+            self.addCleanup(lambda s=server, e=engines: (s.shutdown(), s.server_close(), [x.stop() for x in e]))
+            nodes[role] = (url, node)
+        (primary_url, primary), (standby_url, standby) = nodes["primary"], nodes["standby"]
+        self.assertTrue(primary.active and not standby.active)
+        link = cloud_ui.server_link(self.win)
+        # резервный указан первым — клиент сам выбирает активный узел
+        summary = link.connect(standby_url, "admin", "Adm1n-pass!", listen=False, backup_url=primary_url)
+        self.assertEqual(link.client.base_url, primary_url)
+        self.assertIn("основной, активен", cloud_ui.cluster_text(summary["cluster"]))
+        self.assertEqual(link.candidates(), [standby_url, primary_url])
+        # основной узел пропал, резервный взял роль — клиент переключается
+        primary._set_active(False, "тест")
+        standby.promote()
+        notices = []
+        with patch.object(self.win, "notify", lambda text, *a: notices.append(text)):
+            link._state(False, "HTTP 401")
+        self.assertEqual(link.client.base_url, standby_url)
+        self.assertEqual(link.client.devices(), [])
+        self.assertTrue(any("Переключено на сервер" in n for n in notices))
+        self.assertFalse(link._failing)
+        link.disconnect(forget=True)
+        self.assertIsNone(link._login)
+        with self.assertRaises(cloud_ui.remote.RemoteError):
+            cloud_ui.ServerLink.find_active([standby_url.replace(standby_url.rsplit(":", 1)[1], "1")])
+
+    def _standalone_server(self):
+        engines = []
+
+        def new_engine():
+            engines.append(engine_mod.Engine(receive_events=False, recording_enabled=False))
+            return engines[-1]
+
+        server = server_mod.make_server("127.0.0.1", 0, new_engine())
+        server.new_engine = new_engine
+        server.engine.start()
+        server.cluster_transport = lambda _m, _p: (_ for _ in ()).throw(OSError("нет связи"))
+        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+        self.addCleanup(lambda: (server.shutdown(), server.server_close(), [e.stop() for e in engines]))
+        return server, f"http://127.0.0.1:{server.server_address[1]}"
+
+    def test_cluster_page_and_pair_wizard(self):
+        import sentinel_cluster_ui as cluster_ui
+        security.ensure_admin("Adm1n-pass!")
+        self.assertIn("без резерва", cluster_ui.status_lines({"role": "standalone"}))
+        text = cluster_ui.status_lines({"role": "standby", "node": "b", "active": True, "promoted": True,
+                                        "peer_url": "https://a:8765", "peer_error": "нет ответа", "failover": 30})
+        self.assertIn("работает вместо основного", text)
+        self.assertIn("нет ответа", text)
+        primary_server, primary_url = self._standalone_server()
+        standby_server, standby_url = self._standalone_server()
+        # страница без подключения подсказывает, как подключиться
+        self.win.open_system("config", "cluster")
+        page = self.win.system_window.cluster_page
+        page["refresh"]()
+        link = cloud_ui.server_link(self.win)
+        link.connect(primary_url, "admin", "Adm1n-pass!", listen=False)
+        page["refresh"]()
+        self.assertIn("один, без резерва", page["status"].get_text())
+        # мастер пары: оба сервера настроены, резервный адрес сохранён в клиенте
+        self.assertIsNotNone(cluster_ui.open_pair_wizard(self.win))
+        result = cluster_ui.configure_pair(link, standby_url, "admin", "Adm1n-pass!", primary_url, standby_url)
+        self.assertEqual(result, {"primary": primary_url, "standby": standby_url})
+        self.assertEqual(primary_server.cluster.role, "primary")
+        self.assertTrue(primary_server.cluster.active)
+        self.assertEqual(standby_server.cluster.role, "standby")
+        self.assertFalse(standby_server.cluster.active)
+        self.assertEqual(primary_server.cluster.config["key"], standby_server.cluster.config["key"])
+        self.assertEqual(link.settings()["backup_url"], standby_url)
+        # страница показывает роль и сохраняет изменения через API
+        page["refresh"]()
+        self.assertIn("основной, активен", page["status"].get_text())
+        with patch.object(page["role"], "get_selected", return_value=1):
+            config = page["collect"]()
+        self.assertEqual((config["role"], config["peer_url"]), ("primary", standby_url))
+        notices = []
+        heartbeat, failover, sync = page["spins"]
+        with patch.object(page["role"], "get_selected", return_value=0), \
+                patch.object(heartbeat, "get_value_as_int", return_value=5), \
+                patch.object(failover, "get_value_as_int", return_value=30), \
+                patch.object(sync, "get_value_as_int", return_value=60), \
+                patch.object(self.win, "notify", lambda text, *a, **k: notices.append(text)):
+            page["save"]()
+        self.assertIn("Одиночный сервер", " ".join(notices))
+        self.assertIsNone(primary_server.cluster)
+
 
 if __name__ == "__main__":
     unittest.main()

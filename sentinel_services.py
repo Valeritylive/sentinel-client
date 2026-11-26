@@ -16,14 +16,14 @@ import threading
 import time
 import urllib.error
 import urllib.request
-import uuid
-import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from gi.repository import GLib
 
 import sentinel_alarms as alarms
+import sentinel_arming as arming
+import sentinel_archive as archive
 import sentinel_people as people
 import sentinel_recording as recording
 import sentinel_storage as storage
@@ -188,10 +188,19 @@ class ServicesMixin:
         with storage.database() as db:
             holidays = [dict(r) for r in db.execute("SELECT * FROM holidays")]
         rules = alarms.match_rules(event, alarms.load_rules(True), people.vehicle_index(), people.get_schedule,
-                                   holidays=holidays)
+                                   holidays=holidays) if arming.event_raises_alarms(event) else []
+        if event.get("state") != "inactive":
+            self._flash_map_device(event.get("device_id"), alarm=bool(rules))
+            if event.get("event_type") == "access" and hasattr(self, "_on_access_event"):
+                self._on_access_event(event)
+            if str(event.get("event_type", "")).startswith("anpr") and hasattr(self, "_on_parking_plate"):
+                self._on_parking_plate(event)
         for rule in rules:
             record_id = alarms.create_alarm_record(rule, event, event_id)
             self._run_linkage(rule, event, record_id)
+        if rules and hasattr(self, "wall_show_alarm") and not any(
+                (r.get("linkage") or {}).get("wall") for r in rules):
+            self.wall_show_alarm(device_id=event.get("device_id"), any_alarm=True)
         self._schedule_panel_refresh(alarms_changed=bool(rules))
         if event.get("device_id") and hasattr(self, "timeline_cache"):
             self.timeline_cache = {k: v for k, v in self.timeline_cache.items() if k[0] != event["device_id"]}
@@ -226,6 +235,8 @@ class ServicesMixin:
                     self.trigger_alarm_output(params["device_id"], params["output"], params["auto_close"], quiet=True)
                 elif action == "ptz":
                     self._goto_preset_for_event(params)
+                elif action == "wall":
+                    self.wall_show_alarm(params["wall_id"], params["device_id"])
                 elif action == "email":
                     self._send_alarm_email(rule, event, picture, params["to"])
                 elif action == "popup" and storage.get_setting("alarm_popup", "1") == "1":
@@ -329,42 +340,17 @@ class ServicesMixin:
             GLib.idle_add(self.notify, f"{device['host']}: {exc}", True)
 
     # ================================================================== поиск записей NVR
-    def isapi_search_recordings(self, device, credentials, start, end, max_pages=10):
-        """[(начало, конец, playbackURI)] записей канала за интервал (с постраничной выдачей)."""
-        track = int(device["channel"]) * 100 + 1
+    def isapi_search_recordings(self, device, credentials, start, end, max_pages=10, record_type="all"):
+        """[(начало, конец, playbackURI, тип записи)] за интервал (с постраничной выдачей)."""
         url = f"http://{device['host']}:{device.get('http_port', 80)}/ISAPI/ContentMgmt/search"
         opener = authenticated_opener(url, credentials["username"], credentials.get("password", ""))
-        search_id = str(uuid.uuid4())
-        result = []
-        position = 0
-        start_text = start.astimezone().isoformat(timespec="seconds")
-        end_text = end.astimezone().isoformat(timespec="seconds")
-        for _page in range(max_pages):
-            query = (f"<CMSearchDescription><searchID>{search_id}</searchID><trackList><trackID>{track}</trackID>"
-                     f"</trackList><timeSpanList><timeSpan><startTime>{start_text}</startTime>"
-                     f"<endTime>{end_text}</endTime></timeSpan></timeSpanList><maxResults>50</maxResults>"
-                     f"<searchResultPosition>{position}</searchResultPosition></CMSearchDescription>").encode()
-            request = urllib.request.Request(url, data=query, method="POST", headers={"Content-Type": "application/xml"})
+
+        def post(body):
+            request = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "application/xml"})
             with opener.open(request, timeout=12) as response:
-                root = ET.fromstring(response.read())
-            values = {node.tag.rsplit("}", 1)[-1]: (node.text or "").strip() for node in root.iter()}
-            count = 0
-            for item in root.iter():
-                if item.tag.rsplit("}", 1)[-1] != "searchMatchItem":
-                    continue
-                fields = {n.tag.rsplit("}", 1)[-1]: (n.text or "").strip() for n in item.iter()}
-                try:
-                    clip_start = datetime.fromisoformat(fields["startTime"].replace("Z", "+00:00")).astimezone()
-                    clip_end = datetime.fromisoformat(fields["endTime"].replace("Z", "+00:00")).astimezone()
-                except (KeyError, ValueError):
-                    continue
-                if clip_end > clip_start:
-                    result.append((clip_start, clip_end, fields.get("playbackURI", "")))
-                count += 1
-            position += count
-            if values.get("responseStatusStrg", "").upper() != "MORE" or not count:
-                break
-        return result
+                return response.read()
+        items = archive.search_all(post, archive.track_id(device["channel"]), start, end, record_type, max_pages)
+        return [(i["start"], i["end"], i["uri"], i["kind"]) for i in items]
 
     # ================================================================== резервная запись
     def _recorder_tick(self):
@@ -450,6 +436,8 @@ class ServicesMixin:
         threading.Thread(target=self._status_worker, args=(items, quiet), daemon=True).start()
 
     def _status_worker(self, items, quiet):
+        if any(device.get("cloud_serial") for device, _c in items):
+            _refresh_cloud_status()
         results = []
         for device, credentials in items:
             status, info = "offline", {}
@@ -552,6 +540,8 @@ class ServicesMixin:
             if entry["kind"] == "door":
                 self._place_resource(slot, entry)
         self._update_door_bar()
+        if hasattr(self, "access_doors_holder"):
+            self._render_access_doors()
         return False
 
     # ================================================================== применение уровней доступа
@@ -561,7 +551,7 @@ class ServicesMixin:
         jobs = []
         for person, device_id, doors in plan:
             device = devices.get(device_id)
-            credentials = self.session_credentials.get(device_id) if device else None
+            credentials = self._get_device_credentials(device) if device else None
             jobs.append((person, device, credentials, doors, device_id))
 
         def worker():
@@ -600,3 +590,29 @@ def _cloud_online():
         return hikconnect.cloud_status_map()
     except Exception:
         return {}
+
+
+CLOUD_STATUS_MAX_AGE = 300      # секунд: чаще состояние из Hik-Connect не запрашиваем
+
+
+def _refresh_cloud_status():
+    """Обновить «в сети» из Hik-Connect по сохранённым сессиям (фоновый поток; ошибки не мешают проверке)."""
+    try:
+        import sentinel_hikconnect as hikconnect
+        now = datetime.now().astimezone()
+        for account in hikconnect.load_accounts():
+            if not account.get("auto_sync", 1):
+                continue
+            try:
+                last = datetime.fromisoformat(account.get("last_sync") or "")
+                if (now - last).total_seconds() < CLOUD_STATUS_MAX_AGE:
+                    continue
+            except ValueError:
+                pass
+            try:
+                hikconnect.sync_account(account["id"])
+            except Exception:
+                continue
+        hikconnect.apply_cloud_status()
+    except Exception:
+        pass

@@ -22,6 +22,7 @@ import sentinel_people as people
 import sentinel_recording as recording
 import sentinel_security as security
 import sentinel_storage as storage
+import sentinel_videowall as videowall
 import sentinel_widgets as W
 
 TABS = (("devices", "Управление устройствами", "devices"), ("person", "Персона", "persons"),
@@ -1443,6 +1444,11 @@ class SystemWindow(Gtk.Window):
                                                 "auto_close": auto_close.get_value_as_int()}), render_outputs()))))
 
         render_outputs()
+        walls = videowall.load_walls()
+        wall_ids = [None] + [w["id"] for w in walls]
+        wall_choice = _field(actions, 8, "На видеостену (экран тревог)", _dropdown(
+            ["Нет"] + [w["name"] for w in walls],
+            wall_ids.index(link.get("wall")) if link.get("wall") in wall_ids else 0))
         notebook.append_page(_scroll(actions), W.label("4. Действия"))
         dialog.get_content_area().append(notebook)
         dialog.set_default_size(720, 600)
@@ -1462,7 +1468,8 @@ class SystemWindow(Gtk.Window):
                                     "email": email.get_active(), "email_to": email_to.get_text().strip(),
                                     "ptz": ({"device_id": sources[0] if sources != "all" and sources else None,
                                              "preset": ptz_preset.get_value_as_int()}
-                                            if ptz_preset.get_value_as_int() else None)}}
+                                            if ptz_preset.get_value_as_int() else None),
+                                    "wall": wall_ids[wall_choice.get_selected()]}}
                 try:
                     alarms.save_rule(data, rule_id)
                 except (ValueError, sqlite3.IntegrityError) as exc:
@@ -1687,7 +1694,9 @@ class SystemWindow(Gtk.Window):
                                     ("retention", "Срок хранения данных", self._retention_config),
                                     ("holiday", "Праздники", self._holiday_config),
                                     ("network", "Время и сеть", self._network_config),
-                                    ("capability", "Возможности сервиса", self._capability_config)):
+                                    ("decoding", "Видео и декодирование", self._decoding_config),
+                                    ("capability", "Возможности сервиса", self._capability_config),
+                                    ("cluster", "Кластер серверов", self._cluster_config)):
             button = Gtk.ToggleButton(label=title)
             if first:
                 button.set_group(first)
@@ -1701,6 +1710,10 @@ class SystemWindow(Gtk.Window):
         page.append(nav)
         page.append(stack)
         return page
+
+    def _cluster_config(self):
+        import sentinel_cluster_ui
+        return sentinel_cluster_ui.build_page(self)
 
     def _email_config(self):
         config = storage.get_json_setting("smtp", dict(alarms.DEFAULT_SMTP))
@@ -1867,6 +1880,65 @@ class SystemWindow(Gtk.Window):
         box.append(insecure)
         box.append(W.label("Удалённый доступ к клиенту и мобильное приложение Hik-Connect не поддерживаются: Sentinel "
                            "работает локально и подключается к устройствам напрямую.", "muted", wrap=True))
+        return box
+
+    def _decoding_config(self):
+        import sentinel_decoding as decoding
+        settings = decoding.load_settings()
+        modes, backends = [m for m, _t in decoding.MODES], [b for b, _t in decoding.BACKENDS]
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        W.margins(box, 16)
+        box.append(W.label("Декодирование видео", "section-title"))
+        box.append(W.label("Видеокарта снимает с процессора распаковку H.264/H.265 — это главная нагрузка при "
+                           "многих окнах видео. Если с видеокартой появляются артефакты или чёрные окна, верните "
+                           "«Процессор».", "muted", wrap=True))
+        form = _form()
+        mode = _field(form, 0, "Чем декодировать", _dropdown([t for _m, t in decoding.MODES],
+                                                             modes.index(settings["mode"])))
+        backend = _field(form, 1, "Интерфейс видеокарты", _dropdown([t for _b, t in decoding.BACKENDS],
+                                                                     backends.index(settings["backend"])))
+        box.append(form)
+        try:
+            hardware = decoding.hardware_decoders(decoding.video_decoders())
+        except Exception:       # GStreamer недоступен
+            hardware = {}
+        found = W.label("Найдены аппаратные декодеры: " + decoding.describe_hardware(hardware)
+                        + ("" if hardware else ". " + decoding.install_hint("any")), "muted", wrap=True)
+        box.append(found)
+        status = W.label(getattr(self.owner, "decoding_status", ""), None, wrap=True)
+        box.append(status)
+        windows = W.label("", "muted", wrap=True)
+        windows.set_selectable(True)
+
+        def mode_changed(*_):
+            backend.set_sensitive(modes[mode.get_selected()] == "gpu")
+
+        def show_windows():
+            items = self.owner.active_decoders() if hasattr(self.owner, "active_decoders") else []
+            windows.set_text("\n".join(f"Окно {n} · {name}: {decoding.decoder_title(dec)}" for n, name, dec in items)
+                             or "Открытых окон видео нет.")
+
+        def save():
+            chosen = decoding.save_settings(modes[mode.get_selected()], backends[backend.get_selected()])
+            restarted = self.owner.apply_decoding(restart=True)
+            status.set_text(self.owner.decoding_status)
+            alarms.log_operation(self.owner.session.username, "Декодирование видео",
+                                 f"{chosen['mode']} / {chosen['backend']}")
+            self.owner.notify(self.owner.decoding_status
+                              + (f" Переоткрыто окон: {restarted}." if restarted else ""))
+            GLib.timeout_add_seconds(3, lambda: (show_windows(), False)[1])
+
+        mode.connect("notify::selected", mode_changed)
+        mode_changed()
+        box.append(_toolbar(W.button("Сохранить и применить", save, "red-button"),
+                            W.button("Обновить список окон", show_windows)))
+        box.append(W.label("Какой декодер работает в открытых окнах", "section-title"))
+        box.append(windows)
+        box.append(W.label("Живые окна переоткрываются сразу. Архив и окна, открытые через облако, возьмут новый "
+                           "режим при следующем открытии.", "muted", wrap=True))
+        show_windows()
+        self.decoding_page = {"mode": mode, "backend": backend, "save": save, "status": status,
+                              "windows": windows, "found": found}
         return box
 
     def _capability_config(self):
