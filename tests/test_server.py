@@ -71,6 +71,39 @@ class ServerTests(unittest.TestCase):
             viewer.hikconnect_accounts()
         self.assertEqual(ctx.exception.status, 403)
 
+    def test_private_and_public_views(self):
+        viewer = remote.ServerClient(self.url)
+        viewer.login("viewer", "View3r-pass!")
+        layout = {"layout": 4, "division": "s4", "cells": [
+            {"slot": 0, "kind": "camera", "device": {"host": "10.0.0.5", "port": 8000, "channel": 2}},
+            {"slot": 9, "kind": "bogus"}, {"slot": 99, "kind": "camera", "device": {"host": "x"}}]}
+        public_id = self.admin.create_view("Периметр", True, layout)
+        admin_private = self.admin.create_view("Мой", False, layout)
+        mine = viewer.create_view("Операторский", False, layout)
+        with self.assertRaises(remote.RemoteError) as ctx:
+            viewer.create_view("Нельзя", True, layout)
+        self.assertEqual(ctx.exception.status, 403)
+        listed = viewer.views()
+        self.assertFalse(listed["can_publish"])
+        names = {v["name"]: v for v in listed["items"]}
+        self.assertEqual(set(names), {"Периметр", "Операторский"})
+        self.assertNotIn(admin_private, [v["id"] for v in listed["items"]])
+        self.assertFalse(names["Периметр"]["editable"])
+        self.assertTrue(names["Операторский"]["editable"])
+        self.assertEqual(names["Периметр"]["layout"]["cells"],
+                         [{"slot": 0, "kind": "camera", "device": {"host": "10.0.0.5", "port": 8000, "channel": 2}}])
+        for call in (lambda: viewer.delete_view(public_id), lambda: viewer.update_view(admin_private, name="x")):
+            with self.assertRaises(remote.RemoteError) as ctx:
+                call()
+            self.assertEqual(ctx.exception.status, 403)
+        viewer.update_view(mine, name="Операторский 2")
+        viewer.delete_view(mine)
+        with self.assertRaises(remote.RemoteError) as ctx:
+            viewer.delete_view(mine)
+        self.assertEqual(ctx.exception.status, 404)
+        self.admin.update_view(public_id, public=False)
+        self.assertEqual(viewer.views()["items"], [])
+
     def test_device_crud_and_stream_url_without_leaking_password(self):
         result = self.admin.request("POST", "/devices", {"name": "NVR", "host": "10.0.0.5", "channels": [1, 2],
                                                          "username": "admin", "password": "p@ss w",

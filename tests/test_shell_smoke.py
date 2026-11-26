@@ -280,3 +280,37 @@ class RoleSmoke(ShellSmoke):
         self.assertFalse(self.win.left_sections["ptz"].get_visible())
         self.win._show_module("emap")
         self.assertNotEqual(self.win.stack.get_visible_child_name(), "emap")
+
+
+class ServerViewsSmoke(ShellSmoke):
+    def test_save_and_open_server_view(self):
+        self._add("10.0.0.5", [1, 2])
+        calls = []
+
+        class Client:
+            def create_view(self, name, public, layout):
+                calls.append((name, public, layout))
+                return 42
+
+            def views(self):
+                return {"items": [], "can_publish": True}
+
+        class Link:
+            connected = True
+            client = Client()
+
+        self.win.server_link = Link()
+        self.assertEqual(self.win._server_view_targets(), ["local", "private", "public"])
+        tab = self.win.view_tabs.current()
+        tab.mapping = [{"slot": 0, "kind": "camera", "device_id": self.win.devices[1]["id"]}]
+        with patch.object(self.win, "_server_call", lambda work, done, *_a: done(work())), \
+             patch.object(self.win, "_capture_current_tab", lambda: None):
+            self.win.save_tab_to_server(tab, "Общий", True)
+        self.assertEqual(tab.server_view_id, 42)
+        self.assertEqual(calls[0][2]["cells"][0]["device"], {"host": "10.0.0.5", "port": 8000, "channel": 2})
+        view = {"id": 43, "name": "Чужой", "public": True, "owner": "admin", "editable": False,
+                "layout": calls[0][2]}
+        self.win.open_server_view(view)
+        opened = self.win.view_tabs.current()
+        self.assertEqual(opened.server_view_id, 43)
+        self.assertEqual(opened.mapping[0]["device_id"], self.win.devices[1]["id"])

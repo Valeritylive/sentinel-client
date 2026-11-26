@@ -408,7 +408,14 @@ class ServerLink:
             storage.save_json_secret(SERVER_SECRET, client.base_url, {"username": username, "password": password})
         if listen:
             self.start_listening()
+        GLib.idle_add(self._views_changed)
         return summary
+
+    def _views_changed(self):
+        refresh = getattr(self.owner, "_refresh_server_views", None)
+        if refresh:
+            refresh()
+        return False
 
     def disconnect(self, forget=False):
         if self.stop is not None:
@@ -427,6 +434,7 @@ class ServerLink:
                 settings["auto"] = False
                 storage.set_json_setting(SERVER_SETTING, settings)
         self.online = False
+        GLib.idle_add(self._views_changed)
 
     def start_listening(self):
         if self.stop is not None:
@@ -441,6 +449,9 @@ class ServerLink:
 
     def _message(self, message):
         kind, data = message.get("type"), message.get("data") or {}
+        if kind == "views":
+            GLib.idle_add(self._views_changed)
+            return
         text = None
         if kind == "alarm":
             text = (f"Сервер · тревога «{data.get('rule_name', '')}»: {data.get('device_name', '')} "

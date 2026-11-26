@@ -114,6 +114,19 @@ class ServerClient:
     def events(self, limit=200):
         return self.request("GET", "/events", params={"limit": limit})["items"]
 
+    # ------------------------------------------------------------ виды
+    def views(self):
+        return self.request("GET", "/views")
+
+    def create_view(self, name, public, layout):
+        return self.request("POST", "/views", {"name": name, "public": bool(public), "layout": layout})["id"]
+
+    def update_view(self, view_id, name=None, public=None, layout=None):
+        return self.request("PUT", f"/views/{int(view_id)}", {"name": name, "public": public, "layout": layout})
+
+    def delete_view(self, view_id):
+        return self.request("DELETE", f"/views/{int(view_id)}")
+
     # ------------------------------------------------------------ Hik-Connect
     def hikconnect_accounts(self):
         return self.request("GET", "/hikconnect/accounts")["items"]

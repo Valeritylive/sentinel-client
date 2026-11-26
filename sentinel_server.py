@@ -41,6 +41,7 @@ import sentinel_alarms as alarms  # noqa: E402
 import sentinel_engine as engine_mod  # noqa: E402
 import sentinel_hikconnect as hikconnect  # noqa: E402
 import sentinel_security as security  # noqa: E402
+import sentinel_shared_views as shared_views  # noqa: E402
 import sentinel_storage as storage  # noqa: E402
 from sentinel_protocols import parse_channel_ids, parse_device_info, parse_streaming_channel_ids  # noqa: E402
 
@@ -519,6 +520,48 @@ def event_stream(h, _body):
     finally:
         h.engine.bus.unsubscribe(subscriber)
     return None
+
+
+# ==================================================================== виды (приватные и публичные)
+def _view_call(func, *args, **kwargs):
+    try:
+        return func(*args, **kwargs)
+    except shared_views.ViewAccessError as exc:
+        raise ApiError(HTTPStatus.FORBIDDEN, str(exc)) from exc
+    except KeyError as exc:
+        raise ApiError(HTTPStatus.NOT_FOUND, "Вид не найден") from exc
+
+
+@route("GET", "/views", "live")
+def list_views(h, _body):
+    return {"items": shared_views.list_views(h.session),
+            "can_publish": h.session.can(shared_views.PUBLIC_PERMISSION)}
+
+
+@route("POST", "/views", "live")
+def create_view(h, body):
+    view_id = _view_call(shared_views.create_view, h.session, body.get("name", ""), bool(body.get("public")),
+                         body.get("layout"))
+    h.audit("Сохранён вид", body.get("name", ""), "публичный" if body.get("public") else "приватный")
+    h.engine.bus.publish("views", {"id": view_id})
+    return HTTPStatus.CREATED, {"id": view_id}
+
+
+@route("PUT", r"/views/(\d+)", "live")
+def update_view(h, body, view_id):
+    item = _view_call(shared_views.update_view, h.session, int(view_id), body.get("name"),
+                      body.get("public"), body.get("layout"))
+    h.audit("Изменён вид", item["name"])
+    h.engine.bus.publish("views", {"id": item["id"]})
+    return {"ok": True, "item": item}
+
+
+@route("DELETE", r"/views/(\d+)", "live")
+def delete_view(h, _body, view_id):
+    item = _view_call(shared_views.delete_view, h.session, int(view_id))
+    h.audit("Удалён вид", item["name"])
+    h.engine.bus.publish("views", {"id": item["id"]})
+    return {"ok": True}
 
 
 # ==================================================================== пользователи

@@ -32,6 +32,7 @@ import sentinel_storage as storage
 import sentinel_timeline as tl
 import sentinel_views as views
 import sentinel_widgets as W
+from sentinel_viewshare import TARGET_TITLES
 
 SPEEDS = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0)
 MODULE_PAGES = {
@@ -876,6 +877,10 @@ class MainWindowMixin:
         if tab is None:
             return
         self._capture_current_tab()
+        if tab.server_view_id and not save_as:
+            known = next((v for v in self.__dict__.get("server_views") or [] if v["id"] == tab.server_view_id), {})
+            self.save_tab_to_server(tab, tab.name, known.get("public", False), tab.server_view_id)
+            return
         if tab.view_id and not save_as:
             views.save_view(tab.name, tab, view_id=tab.view_id)
             tab.dirty = False
@@ -885,7 +890,10 @@ class MainWindowMixin:
             return
         groups = views.load_view_groups()
 
-        def store(name, group_index):
+        def store(name, group_index, target="local"):
+            if target != "local":
+                self.save_tab_to_server(tab, name, target == "public")
+                return
             group_id = groups[group_index]["id"] if 0 <= group_index < len(groups) else None
             try:
                 view_id = views.save_view(name, tab, group_id)
@@ -912,14 +920,19 @@ class MainWindowMixin:
         group = Gtk.DropDown.new_from_strings(["— без группы —"] + [g["name"] for g in groups])
         self._field(form, "Название вида", entry, 0)
         self._field(form, "Группа видов", group, 1)
+        targets = self._server_view_targets()
+        target = Gtk.DropDown.new_from_strings([TARGET_TITLES[t] for t in targets])
+        if len(targets) > 1:
+            self._field(form, "Где хранить", target, 2)
         dialog.get_content_area().append(form)
 
         def response(dlg, result):
             name = entry.get_text().strip()
             index = group.get_selected() - 1
+            chosen = targets[min(target.get_selected(), len(targets) - 1)] if len(targets) > 1 else "local"
             dlg.close()
             if result == Gtk.ResponseType.ACCEPT and name:
-                callback(name, index)
+                callback(name, index, chosen)
 
         dialog.connect("response", response)
         dialog.present()
@@ -979,6 +992,7 @@ class MainWindowMixin:
                 row = W.button("▦ " + view["name"], lambda v=view: self.load_custom_view(v), "tree-row")
                 W.on_right_click(row, lambda w, x, y, v=view: self._view_menu(v, w, x, y))
                 target.append(row)
+        self._append_server_views(self.custom_view_list)
 
     def _view_menu(self, view, widget, x, y):
         groups = views.load_view_groups()
