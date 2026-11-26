@@ -42,6 +42,8 @@ expander title { padding: 6px 4px; }
 .tree-row { padding: 3px 4px; border-radius: 3px; background: transparent; border: none; box-shadow: none; }
 .tree-row:hover { background: #2c2d32; }
 .tree-row.selected { background: #34353b; }
+.tree-play { padding: 0 4px; min-height: 0; min-width: 0; font-size: 10px; color: #9aa0a6; }
+.tree-play:hover { color: #e53935; background: #2c2d32; }
 .status-online { color: #3fbf6f; }
 .cam-idle { color: #6c6e74; }
 .cam-active { color: #3fbf6f; }

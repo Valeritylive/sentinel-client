@@ -1106,6 +1106,17 @@ class MainWindowMixin:
                     mark = W.label("○ снято" if len(disarmed) == len(channels) else "◐", "muted")
                     mark.set_tooltip_text(f"Снято с охраны каналов: {len(disarmed)} из {len(channels)}")
                     head.append(mark)
+                if first.get("category") != "access":
+                    # Как в iVMS: ▶ рядом с названием и двойной щелчок — открыть все каналы устройства.
+                    play = W.button("▶", lambda c=channels: self.start_channels(c), flat=True,
+                                    tooltip="Открыть все каналы устройства (или двойной щелчок по названию)")
+                    play.add_css_class("tree-play")
+                    head.append(play)
+                    double = Gtk.GestureClick()
+                    double.set_button(1)
+                    double.connect("pressed", lambda _g, n, _x, _y, c=channels:
+                                   n == 2 and self.start_channels(c))
+                    head.add_controller(double)
                 expander.set_label_widget(head)
                 expander.set_expanded(bool(query) or len(members) <= 2)
                 W.on_right_click(expander, lambda w, x, y, m=member, d=first: self._device_menu(m, d, w, x, y))

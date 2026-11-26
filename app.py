@@ -2109,9 +2109,17 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         if not self.devices:
             self.notify("Сначала добавьте камеры в раздел «Устройства»")
             return
-        targets = self.devices[:64]
-        if len(self.devices) > 64:
-            self.notify(f"Найдено {len(self.devices)} каналов; эта раскладка поддерживает до 64. "
+        self.start_channels(self.devices)
+
+    def start_channels(self, channels):
+        """Открывает в виде все переданные каналы, начиная с первого окна."""
+        channels = [c for c in channels if c.get("category") != "access"]
+        if not channels:
+            self.notify("У устройства нет видеоканалов")
+            return
+        targets = channels[:64]
+        if len(channels) > 64:
+            self.notify(f"Найдено {len(channels)} каналов; эта раскладка поддерживает до 64. "
                         "Будут запущены первые 64.")
         if len(targets) > self.layout_count:
             new_count = next((count for count in (1, 4, 9, 16, 25, 36, 49, 64)
