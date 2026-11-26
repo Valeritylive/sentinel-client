@@ -18,9 +18,16 @@ _TICKS = {24 * 3600: (7200, 1800), 12 * 3600: (3600, 900), 6 * 3600: (1800, 300)
 
 # Типы отрезков записи и их цвета (как на шкале HikCentral: обычная запись — синяя,
 # событие — красная/оранжевая)
-SEGMENT_COLORS = {"continuous": (0.16, 0.52, 0.88), "event": (0.91, 0.33, 0.2),
-                  "person": (0.95, 0.62, 0.15), "vehicle": (0.95, 0.62, 0.15),
+SEGMENT_COLORS = {"continuous": (0.16, 0.52, 0.88), "motion": (0.93, 0.78, 0.2),
+                  "alarm": (0.88, 0.2, 0.2), "smart": (0.62, 0.4, 0.9),
+                  "event": (0.91, 0.33, 0.2), "person": (0.95, 0.62, 0.15), "vehicle": (0.95, 0.62, 0.15),
                   "local": (0.25, 0.75, 0.45)}
+# Отрезки записей (полоса шкалы) и маркеры событий (флажки над полосой)
+RECORD_KINDS = ("continuous", "motion", "alarm", "smart", "local")
+MARKER_KINDS = ("event", "person", "vehicle")
+KIND_TITLES = {"continuous": "Непрерывная запись", "motion": "Запись по движению", "alarm": "Запись по тревоге",
+               "smart": "Запись по событию", "local": "Резервная запись ПК", "event": "Событие",
+               "person": "Персона", "vehicle": "ТС"}
 FILTERS = ("all", "event", "person", "vehicle")
 
 
@@ -33,6 +40,17 @@ class Segment:
 
     def contains(self, moment):
         return self.start <= moment < self.end
+
+    @property
+    def is_marker(self):
+        return self.kind in MARKER_KINDS
+
+    @property
+    def moment(self):
+        """Момент события для маркера (иначе — начало отрезка)."""
+        if isinstance(self.payload, dict) and self.payload.get("moment") is not None:
+            return self.payload["moment"]
+        return self.start
 
 
 def zoom_in(span):
@@ -124,6 +142,20 @@ class TimelineModel:
         candidates.sort(key=lambda s: 0 if s.kind != "continuous" else 1)
         return candidates[0]
 
+    def marker_near(self, x, width, tolerance=6):
+        """Маркер события, ближайший к точке x шкалы (в пределах tolerance пикселей)."""
+        best, best_distance = None, tolerance + 1
+        for seg in self.segments:
+            if not seg.is_marker or (self.filter != "all" and seg.kind != self.filter):
+                continue
+            moment = seg.moment
+            if not self.start <= moment <= self.end:
+                continue
+            distance = abs(self.x_for(moment, width) - x)
+            if distance < best_distance:
+                best, best_distance = seg, distance
+        return best
+
     def next_segment_after(self, moment):
         later = sorted((s for s in self.segments if s.start > moment), key=lambda s: s.start)
         return later[0] if later else None
@@ -131,8 +163,8 @@ class TimelineModel:
 
 def merge_segments(segments, gap=2):
     """Склеить соседние отрезки одного типа с зазором <= gap секунд (у NVR файлы по ~1 ч)."""
-    ordered = sorted(segments, key=lambda s: (s.kind, s.start))
-    merged = []
+    ordered = sorted((s for s in segments if not s.is_marker), key=lambda s: (s.kind, s.start))
+    merged = [s for s in segments if s.is_marker]   # у каждого маркера своё событие — не склеиваем
     for seg in ordered:
         if merged and merged[-1].kind == seg.kind and (seg.start - merged[-1].end).total_seconds() <= gap:
             if seg.end > merged[-1].end:

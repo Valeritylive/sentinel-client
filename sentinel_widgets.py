@@ -53,6 +53,8 @@ expander title { padding: 6px 4px; }
 .camera-tile { background: #26272b; border: 1px solid #141517; border-radius: 0; }
 .camera-tile:hover { border-color: #55565c; }
 .camera-tile.selected { border: 2px solid #e8232c; }
+.rec-continuous { color: #2985e0; } .rec-motion { color: #edc733; } .rec-alarm { color: #e03333; }
+.rec-smart { color: #9e66e6; } .rec-local { color: #40bf73; }
 .board-card { background: #232428; border: 1px solid #2f3035; border-radius: 6px; padding: 12px; }
 .board-card button, .board-card button label { color: #cfd3da; }
 .tile-toolbar { background: alpha(#000, 0.6); border-radius: 4px; padding: 1px; }
@@ -431,10 +433,11 @@ class Timeline(Gtk.DrawingArea):
 
     HEIGHT = 46
 
-    def __init__(self, on_seek, on_view_changed=None, label_text=""):
+    def __init__(self, on_seek, on_view_changed=None, label_text="", on_marker=None):
         super().__init__()
         self.model = tl.TimelineModel()
         self.on_seek = on_seek
+        self.on_marker = on_marker
         self.on_view_changed = on_view_changed
         self.label_text = label_text
         self.set_hexpand(True)
@@ -463,8 +466,14 @@ class Timeline(Gtk.DrawingArea):
         moment = self.model.time_at(x, self.get_width())
         segment = self.model.segment_at(moment)
         tip = tl.format_position(moment)
-        if segment:
-            tip += f"\nЗапись: {segment.start:%H:%M:%S}–{segment.end:%H:%M:%S}"
+        marker = self.model.marker_near(x, self.get_width())
+        if marker is not None:
+            event = (marker.payload or {}).get("event") or {} if isinstance(marker.payload, dict) else {}
+            tip = (f"{tl.KIND_TITLES.get(marker.kind, 'Событие')} · {marker.moment:%H:%M:%S}\n"
+                   f"{event.get('title', '')}  {event.get('device_name', '')}\nЩелчок — перейти и открыть карточку")
+        elif segment:
+            tip += (f"\n{tl.KIND_TITLES.get(segment.kind, 'Запись')}: "
+                    f"{segment.start:%H:%M:%S}–{segment.end:%H:%M:%S}")
         self.set_tooltip_text(tip)
 
     def _drag_begin(self, _gesture, x, _y):
@@ -483,6 +492,10 @@ class Timeline(Gtk.DrawingArea):
             return
         self._drag_center = None
         if abs(dx) < 4:
+            marker = self.model.marker_near(self._drag_x + dx, self.get_width())
+            if marker is not None and self.on_marker:
+                self.on_marker(marker)
+                return
             moment = self.model.time_at(self._drag_x + dx, self.get_width())
             if self.on_seek:
                 self.on_seek(moment)
@@ -520,12 +533,34 @@ class Timeline(Gtk.DrawingArea):
         cr.set_source_rgb(0.15, 0.155, 0.17)
         cr.rectangle(0, bar_top, width, bar_height)
         cr.fill()
-        for segment in model.visible_segments():
+        visible = model.visible_segments()
+        # Непрерывная запись снизу, записи по движению/тревоге/событию поверх неё.
+        for segment in sorted((s for s in visible if not s.is_marker),
+                              key=lambda s: 0 if s.kind in ("continuous", "local") else 1):
             x1 = model.x_for(segment.start, width)
             x2 = max(x1 + 1.5, model.x_for(segment.end, width))
             cr.set_source_rgb(*tl.SEGMENT_COLORS.get(segment.kind, tl.SEGMENT_COLORS["continuous"]))
-            top = bar_top if segment.kind in ("continuous", "local") else bar_top - 3
-            cr.rectangle(x1, top, x2 - x1, bar_height if segment.kind in ("continuous", "local") else 4)
+            if segment.kind == "local":
+                cr.rectangle(x1, bar_top + bar_height - 3, x2 - x1, 3)
+            else:
+                cr.rectangle(x1, bar_top, x2 - x1, bar_height)
+            cr.fill()
+        for segment in model.segments:  # маркеры событий: флажок над полосой
+            if not segment.is_marker or (model.filter != "all" and segment.kind != model.filter):
+                continue
+            moment = segment.moment
+            if not model.start <= moment <= model.end:
+                continue
+            x = int(model.x_for(moment, width)) + 0.5
+            cr.set_source_rgb(*tl.SEGMENT_COLORS.get(segment.kind, tl.SEGMENT_COLORS["event"]))
+            cr.set_line_width(1)
+            cr.move_to(x, bar_top - 1)
+            cr.line_to(x, bar_top + bar_height)
+            cr.stroke()
+            cr.move_to(x - 4, bar_top - 8)
+            cr.line_to(x + 4, bar_top - 8)
+            cr.line_to(x, bar_top - 2)
+            cr.close_path()
             cr.fill()
         if self.label_text:
             cr.set_source_rgb(1, 1, 1)

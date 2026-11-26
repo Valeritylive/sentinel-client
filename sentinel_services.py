@@ -16,14 +16,13 @@ import threading
 import time
 import urllib.error
 import urllib.request
-import uuid
-import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from gi.repository import GLib
 
 import sentinel_alarms as alarms
+import sentinel_archive as archive
 import sentinel_people as people
 import sentinel_recording as recording
 import sentinel_storage as storage
@@ -329,42 +328,17 @@ class ServicesMixin:
             GLib.idle_add(self.notify, f"{device['host']}: {exc}", True)
 
     # ================================================================== поиск записей NVR
-    def isapi_search_recordings(self, device, credentials, start, end, max_pages=10):
-        """[(начало, конец, playbackURI)] записей канала за интервал (с постраничной выдачей)."""
-        track = int(device["channel"]) * 100 + 1
+    def isapi_search_recordings(self, device, credentials, start, end, max_pages=10, record_type="all"):
+        """[(начало, конец, playbackURI, тип записи)] за интервал (с постраничной выдачей)."""
         url = f"http://{device['host']}:{device.get('http_port', 80)}/ISAPI/ContentMgmt/search"
         opener = authenticated_opener(url, credentials["username"], credentials.get("password", ""))
-        search_id = str(uuid.uuid4())
-        result = []
-        position = 0
-        start_text = start.astimezone().isoformat(timespec="seconds")
-        end_text = end.astimezone().isoformat(timespec="seconds")
-        for _page in range(max_pages):
-            query = (f"<CMSearchDescription><searchID>{search_id}</searchID><trackList><trackID>{track}</trackID>"
-                     f"</trackList><timeSpanList><timeSpan><startTime>{start_text}</startTime>"
-                     f"<endTime>{end_text}</endTime></timeSpan></timeSpanList><maxResults>50</maxResults>"
-                     f"<searchResultPosition>{position}</searchResultPosition></CMSearchDescription>").encode()
-            request = urllib.request.Request(url, data=query, method="POST", headers={"Content-Type": "application/xml"})
+
+        def post(body):
+            request = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "application/xml"})
             with opener.open(request, timeout=12) as response:
-                root = ET.fromstring(response.read())
-            values = {node.tag.rsplit("}", 1)[-1]: (node.text or "").strip() for node in root.iter()}
-            count = 0
-            for item in root.iter():
-                if item.tag.rsplit("}", 1)[-1] != "searchMatchItem":
-                    continue
-                fields = {n.tag.rsplit("}", 1)[-1]: (n.text or "").strip() for n in item.iter()}
-                try:
-                    clip_start = datetime.fromisoformat(fields["startTime"].replace("Z", "+00:00")).astimezone()
-                    clip_end = datetime.fromisoformat(fields["endTime"].replace("Z", "+00:00")).astimezone()
-                except (KeyError, ValueError):
-                    continue
-                if clip_end > clip_start:
-                    result.append((clip_start, clip_end, fields.get("playbackURI", "")))
-                count += 1
-            position += count
-            if values.get("responseStatusStrg", "").upper() != "MORE" or not count:
-                break
-        return result
+                return response.read()
+        items = archive.search_all(post, archive.track_id(device["channel"]), start, end, record_type, max_pages)
+        return [(i["start"], i["end"], i["uri"], i["kind"]) for i in items]
 
     # ================================================================== резервная запись
     def _recorder_tick(self):

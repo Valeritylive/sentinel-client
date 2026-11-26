@@ -470,7 +470,8 @@ class MainWindowMixin:
 
         self.timeline_area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self.timeline = W.Timeline(self.timeline_seek, self._load_timeline_segments)
+        self.timeline = W.Timeline(self.timeline_seek, self._load_timeline_segments,
+                                   on_marker=self.open_timeline_marker)
         line.append(self.timeline)
         zoom = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         zoom.set_valign(Gtk.Align.CENTER)
@@ -1736,8 +1737,8 @@ class MainWindowMixin:
         segments = []
         if device.get("protocol") == "hikvision" and credentials:
             try:
-                for start, end, uri in self.isapi_search_recordings(device, credentials, day_start, day_end):
-                    segments.append(tl.Segment(start, end, "continuous", uri))
+                for start, end, uri, kind in self.isapi_search_recordings(device, credentials, day_start, day_end):
+                    segments.append(tl.Segment(start, end, kind, uri))
             except Exception:
                 pass
         for began, finish, path in recording.list_segments(recording.storage_root(), device["id"], day_start, day_end):
@@ -1748,12 +1749,57 @@ class MainWindowMixin:
                 if event["device_id"] != device["id"] and event["device_name"] != device.get("host_name"):
                     continue
                 moment = datetime.fromisoformat(event["time"].replace("Z", "+00:00")).astimezone()
+                event = dict(event, title=alarms.event_title(event["event_type"]))
                 segments.append(tl.Segment(moment - timedelta(seconds=5), moment + timedelta(seconds=10),
-                                           event["category"] if event["category"] in ("person", "vehicle") else "event"))
+                                           event["category"] if event["category"] in ("person", "vehicle") else "event",
+                                           {"moment": moment, "event": event}))
         except Exception:
             pass
         merged = tl.merge_segments(segments)
         GLib.idle_add(self._timeline_loaded, key, merged, token)
+
+    def open_timeline_marker(self, segment):
+        """Щелчок по маркеру события: перемотать к моменту (за 5 с до него) и открыть карточку."""
+        payload = segment.payload if isinstance(segment.payload, dict) else {}
+        self.timeline_seek(segment.moment - timedelta(seconds=5))
+        event = payload.get("event")
+        if event:
+            self.show_event_card(event, segment.moment)
+
+    def show_event_card(self, event, moment=None):
+        if getattr(self, "event_card_window", None) is not None:
+            self.event_card_window.destroy()
+        window = Gtk.Window(title="Событие", transient_for=self)
+        window.set_default_size(460, -1)
+        self.event_card_window = window
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        W.margins(box, 14)
+        box.append(W.label(event.get("title") or alarms.event_title(event.get("event_type", "")), "section-title"))
+        when = (moment.strftime("%Y-%m-%d %H:%M:%S") if moment else event.get("time", "")[:19].replace("T", " "))
+        box.append(W.label(f"{when} · {event.get('device_name') or '—'}"
+                           + (f" · канал {event['channel']}" if event.get("channel") else ""), "muted"))
+        picture_path = event.get("picture_path") or ""
+        if picture_path and os.path.isfile(picture_path):
+            picture = Gtk.Picture.new_for_filename(picture_path)
+            picture.set_can_shrink(True)
+            picture.set_size_request(420, 236)
+            box.append(picture)
+        try:
+            details = json.loads(event.get("details") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            details = {}
+        for key in ("licensePlate", "vehicleList", "name", "employeeNo", "targetType", "regionID"):
+            if details.get(key):
+                box.append(W.label(f"{key}: {details[key]}", "muted"))
+        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        actions.set_halign(Gtk.Align.END)
+        if moment is not None:
+            actions.append(W.button("↺ С начала события", lambda: self.timeline_seek(moment - timedelta(seconds=5))))
+        actions.append(W.button("Закрыть", window.destroy))
+        box.append(actions)
+        window.set_child(box)
+        window.connect("destroy", lambda *_a: setattr(self, "event_card_window", None))
+        window.present()
 
     def _timeline_loaded(self, key, segments, token):
         self.timeline_cache[key] = (time.monotonic(), segments)

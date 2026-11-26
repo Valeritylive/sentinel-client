@@ -37,7 +37,8 @@ class ViewShareMixin:
             try:
                 result = work()
             except Exception as exc:  # сеть, права, ошибки сервера
-                GLib.idle_add(lambda: (self.notify(f"{error_prefix}: {exc}", error=True), False)[1])
+                message = f"{error_prefix}: {exc}"
+                GLib.idle_add(lambda: (self.notify(message, error=True), False)[1])
                 return
             GLib.idle_add(lambda: (done(result), False)[1])
         threading.Thread(target=worker, daemon=True).start()

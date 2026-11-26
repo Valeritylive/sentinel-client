@@ -44,6 +44,7 @@ except ImportError as exc:
         "Установите gir1.2-gtk-4.0 и gir1.2-gstreamer-1.0."
     ) from exc
 
+import sentinel_archive as archive
 import sentinel_devmgmt as devmgmt
 import sentinel_cloudstream as cloudstream
 import sentinel_hikconnect as hikconnect
@@ -520,9 +521,14 @@ class SentinelWindow(BoardMixin, ViewShareMixin, MainWindowMixin, ServicesMixin,
         now = datetime.now().replace(second=0, microsecond=0)
         self.archive_start = Gtk.Entry(text=(now - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M"))
         self.archive_end = Gtk.Entry(text=now.strftime("%Y-%m-%d %H:%M"))
+        self.archive_scope = Gtk.DropDown.new_from_strings(
+            ["Только этот канал", "Все каналы регистратора", "Все камеры области"])
+        self.archive_record_type = Gtk.DropDown.new_from_strings(list(archive.RECORD_TYPES.values()))
         self._field(form, "Канал", self.archive_device, 0)
-        self._field(form, "Начало (локальное время)", self.archive_start, 1)
-        self._field(form, "Конец (локальное время)", self.archive_end, 2)
+        self._field(form, "Где искать", self.archive_scope, 1)
+        self._field(form, "Тип записи", self.archive_record_type, 2)
+        self._field(form, "Начало (локальное время)", self.archive_start, 3)
+        self._field(form, "Конец (локальное время)", self.archive_end, 4)
         sidebar.append(form)
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         actions.set_halign(Gtk.Align.END)
@@ -2813,79 +2819,103 @@ class SentinelWindow(BoardMixin, ViewShareMixin, MainWindowMixin, ServicesMixin,
     def _search_archive(self, device, credentials):
         start_text = credentials.pop("start")
         end_text = credentials.pop("end")
+        scope = ("channel", "device", "area")[min(2, self.archive_scope.get_selected())]
+        record_type = list(archive.RECORD_TYPES)[min(len(archive.RECORD_TYPES) - 1,
+                                                     self.archive_record_type.get_selected())]
+        targets = []
+        for camera in archive.scope_devices(self.devices, device, scope) or [device]:
+            same_device = camera["host"] == device["host"] and camera.get("sdk_port") == device.get("sdk_port")
+            targets.append((camera, dict(credentials) if same_device else self._get_device_credentials(camera)))
         token = uuid.uuid4().hex
         self.archive_query_token = token
         self.archive_matches = []
         self._update_archive_timeline_marks()
         self._clear_box(self.archive_results)
-        self.archive_results.append(make_label("Идёт поиск…", "muted"))
+        self.archive_results.append(make_label(f"Идёт поиск… камер: {len(targets)}", "muted"))
         threading.Thread(target=self._archive_search_worker,
-            args=(device, credentials, start_text, end_text, token), daemon=True).start()
+            args=(targets, start_text, end_text, record_type, token), daemon=True).start()
 
-    def _archive_search_worker(self, device, credentials, start_text, end_text, token):
+    def _archive_search_worker(self, targets, start_text, end_text, record_type, token):
         try:
-            start = datetime.fromisoformat(start_text).astimezone().isoformat(timespec="seconds")
-            end = datetime.fromisoformat(end_text).astimezone().isoformat(timespec="seconds")
+            start = datetime.fromisoformat(start_text).astimezone()
+            end = datetime.fromisoformat(end_text).astimezone()
             if end <= start:
                 raise ValueError("Конец интервала должен быть позже начала")
-            if device["protocol"] != "hikvision":
-                raise ValueError("Поиск файлов доступен для устройств Hikvision с ISAPI")
-            track = int(device["channel"]) * 100 + 1
-            query = (f"<CMSearchDescription><searchID>{uuid.uuid4()}</searchID><trackList><trackID>{track}</trackID></trackList>"
-                f"<timeSpanList><timeSpan><startTime>{start}</startTime><endTime>{end}</endTime></timeSpan></timeSpanList>"
-                "<maxResults>64</maxResults><searchResultPosition>0</searchResultPosition></CMSearchDescription>").encode()
-            url = f"http://{device['host']}:{device.get('http_port', 80)}/ISAPI/ContentMgmt/search"
-            opener = authenticated_opener(url, credentials["username"], credentials["password"])
-            request = urllib.request.Request(url, data=query, method="POST", headers={"Content-Type": "application/xml"})
-            with opener.open(request, timeout=12) as response:
-                xml = ET.fromstring(response.read())
-            matches = []
-            for item in xml.iter():
-                if item.tag.rsplit("}", 1)[-1] != "searchMatchItem":
+            results, problems = [], []
+            for device, credentials in targets:
+                if token != self.archive_query_token:
+                    return
+                if device.get("protocol") != "hikvision":
+                    problems.append(f"{device['name']}: поиск доступен для Hikvision с ISAPI")
                     continue
-                values = {node.tag.rsplit("}", 1)[-1]: (node.text or "").strip() for node in item.iter()}
-                uri = values.get("playbackURI")
-                if uri:
-                    clip_start = values.get("startTime", "")
-                    clip_end = values.get("endTime", "")
-                    try:
-                        if datetime.fromisoformat(clip_end.replace("Z", "+00:00")).astimezone() <= datetime.fromisoformat(
-                                clip_start.replace("Z", "+00:00")).astimezone():
-                            continue
-                    except ValueError:
-                        continue
-                    matches.append({"start": clip_start, "end": clip_end, "uri": uri,
-                                    "device": device, "credentials": credentials})
-            GLib.idle_add(self._show_archive_results, token, matches)
+                if not credentials or not credentials.get("username"):
+                    problems.append(f"{device['name']}: нет сохранённого пароля")
+                    continue
+                try:
+                    found = self.isapi_search_recordings(device, credentials, start, end, record_type=record_type)
+                except Exception as exc:
+                    problems.append(f"{device['name']}: {exc}")
+                    continue
+                results.append((device, [{"start": s.isoformat(timespec="seconds"), "end": e.isoformat(timespec="seconds"),
+                                          "uri": uri, "kind": kind, "device": device, "credentials": credentials}
+                                         for s, e, uri, kind in found if uri]))
+            if problems and not any(items for _d, items in results):
+                raise ValueError("; ".join(problems[:3]))
+            GLib.idle_add(self._show_archive_results, token, results, problems)
         except Exception as exc:
             GLib.idle_add(self._archive_search_error, token, str(exc))
 
-    def _show_archive_results(self, token, matches):
+    def _show_archive_results(self, token, results, problems=()):
         if token != self.archive_query_token:
             return GLib.SOURCE_REMOVE
-        self.archive_matches = matches
+        groups = archive.group_by_camera(results)
+        self.archive_matches = [m for _device, items in groups for m in items]
+        self.archive_groups = groups
         self._clear_box(self.archive_results)
-        if not matches:
+        if problems:
+            warning = make_label("Не все камеры проверены: " + "; ".join(problems[:3]), "muted")
+            warning.set_wrap(True)
+            self.archive_results.append(warning)
+        if not groups:
             self.archive_results.append(make_label("Записей на выбранном интервале не найдено.", "muted"))
             self._update_archive_timeline_marks()
             return GLib.SOURCE_REMOVE
-        matches.sort(key=lambda item: self._archive_datetime(item["start"]))
-        for match in matches:
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-            row.set_margin_top(5)
-            row.set_margin_bottom(5)
-            label = make_label(
-                f"{self._archive_datetime(match['start']).strftime('%m-%d %H:%M:%S')}  –  "
-                f"{self._archive_datetime(match['end']).strftime('%H:%M:%S')}", "muted")
-            label.set_hexpand(True)
-            row.append(label)
-            play = Gtk.Button(label="▶ Просмотр")
-            play.connect("clicked", lambda _button, m=match: self._play_search_match(m))
-            row.append(play)
-            export = Gtk.Button(label="Сохранить")
-            export.connect("clicked", lambda _button, m=match: self._export_search_match(m))
-            row.append(export)
-            self.archive_results.append(row)
+        for device, matches in groups:
+            inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            expander = Gtk.Expander(label=f"{device['name']}  ·  {len(matches)}")
+            expander.set_expanded(len(groups) <= 3)
+            expander.set_child(inner)
+            head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            expander.set_hexpand(True)
+            head.append(expander)
+            export_all = Gtk.Button(label="⇩ Все")
+            export_all.set_tooltip_text("Экспортировать все записи камеры одним пакетом")
+            export_all.set_valign(Gtk.Align.START)
+            export_all.connect("clicked", lambda _b, d=device, m=matches: self.export_evidence(d, m))
+            head.append(export_all)
+            self.archive_results.append(head)
+            for match in matches:
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                row.set_margin_top(3)
+                row.set_margin_bottom(3)
+                row.set_margin_start(12)
+                dot = make_label("●", f"rec-{match['kind']}")
+                dot.set_tooltip_text(archive.RECORD_TYPES.get(match["kind"], ""))
+                row.append(dot)
+                label = make_label(
+                    f"{self._archive_datetime(match['start']).strftime('%m-%d %H:%M:%S')}  –  "
+                    f"{self._archive_datetime(match['end']).strftime('%H:%M:%S')}", "muted")
+                label.set_hexpand(True)
+                row.append(label)
+                play = Gtk.Button(label="▶")
+                play.set_tooltip_text("Просмотр")
+                play.connect("clicked", lambda _button, m=match: self._play_search_match(m))
+                row.append(play)
+                export = Gtk.Button(label="⇩")
+                export.set_tooltip_text("Экспорт: видео MP4, плеер, контрольные суммы")
+                export.connect("clicked", lambda _button, m=match: self._export_search_match(m))
+                row.append(export)
+                inner.append(row)
         self._update_archive_timeline_marks()
         return GLib.SOURCE_REMOVE
 
@@ -3143,20 +3173,68 @@ class SentinelWindow(BoardMixin, ViewShareMixin, MainWindowMixin, ServicesMixin,
         self._set_archive_timeline_position()
 
     def _export_search_match(self, match):
+        self.export_evidence(match["device"], [match])
+
+    def export_evidence(self, device, matches):
+        """Пакет доказательств: MP4 по каждой записи, index.html-плеер, manifest.json, SHA256SUMS и ZIP."""
+        if not self.session.can("playback"):
+            self.notify("Нет прав на экспорт записей", error=True)
+            return
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
             self.notify("Для экспорта записи установите FFmpeg")
             return
-        uri = self._authenticate_device_uri(match["uri"], match["device"], match["credentials"])
-        folder = Path.home() / "Videos" / "Sentinel"
-        folder.mkdir(parents=True, exist_ok=True)
-        filename = folder / datetime.now().strftime("export_%Y%m%d_%H%M%S.mkv")
-        try:
-            FfmpegJob(ffmpeg, uri, str(filename), on_error=self._ffmpeg_failed)
-        except OSError as exc:
-            self.notify(f"Не удалось запустить FFmpeg: {exc}")
+        if not matches:
             return
-        self.notify("Экспорт записи начат")
+        first = self._archive_datetime(matches[0]["start"])
+        root = getattr(self, "record_folder", Path.home() / "Videos" / "Sentinel") / "Evidence"
+        folder = archive.package_folder(root, device, first)
+        folder.mkdir(parents=True, exist_ok=True)
+        clips = []
+        for index, match in enumerate(matches, 1):
+            start, end = self._archive_datetime(match["start"]), self._archive_datetime(match["end"])
+            camera = match["device"]
+            clips.append({"file": archive.clip_filename(index, camera, start), "camera": camera["name"],
+                          "host": camera["host"], "channel": camera["channel"], "start": start, "end": end,
+                          "kind": match.get("kind", "continuous"), "_match": match})
+        self.notify(f"Экспорт начат: {len(clips)} зап. → {folder}")
+        self._export_next_clip(ffmpeg, folder, clips, 0)
+
+    def _export_next_clip(self, ffmpeg, folder, clips, index):
+        if index >= len(clips):
+            public = [{k: v for k, v in c.items() if not k.startswith("_")} for c in clips]
+            try:
+                manifest, bundle = archive.finalize_package(folder, public, self.session.username)
+            except OSError as exc:
+                self.notify(f"Экспорт: не удалось записать пакет: {exc}", error=True)
+                return
+            alarms.log_operation(self.session.username, "Экспорт записей", str(folder),
+                                 f"клипов: {len(manifest['clips'])}")
+            if not manifest["clips"]:
+                self.notify("Экспорт не удался: устройство не отдало видео", error=True)
+            else:
+                self.notify(f"Экспорт готов: {len(manifest['clips'])} из {len(clips)} · "
+                            f"{bundle or folder}")
+            return
+        clip = clips[index]
+        match = clip["_match"]
+        try:
+            uri = self._authenticate_device_uri(match["uri"], match["device"], match["credentials"])
+            duration = (clip["end"] - clip["start"]).total_seconds()
+            job = FfmpegJob(ffmpeg, uri, str(folder / clip["file"]), on_error=self._ffmpeg_failed,
+                            command=lambda list_path, out=folder / clip["file"], d=duration:
+                            archive.ffmpeg_export_command(ffmpeg, list_path, out, d))
+        except (OSError, ValueError) as exc:
+            self.notify(f"Экспорт {clip['camera']}: {exc}", error=True)
+            GLib.idle_add(self._export_next_clip, ffmpeg, folder, clips, index + 1)
+            return
+
+        def wait():
+            if job.poll() is None:
+                return GLib.SOURCE_CONTINUE
+            self._export_next_clip(ffmpeg, folder, clips, index + 1)
+            return GLib.SOURCE_REMOVE
+        GLib.timeout_add_seconds(1, wait)
 
     def _authenticate_device_uri(self, uri, device, credentials):
         parsed = urllib.parse.urlparse(uri)
