@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Опубликовать релиз v<VERSION> (только из main)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -58,10 +63,14 @@ jobs:
             Sentinel-*-x86_64.AppImage
 
       - name: Publish GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || (inputs.publish && github.ref == 'refs/heads/main')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" sentinel_*.deb Sentinel-*-x86_64.AppImage --generate-notes
+        run: |
+          # тег из push тега или v<VERSION> при ручном запуске (тег создаётся на этом коммите)
+          tag="$GITHUB_REF_NAME"
+          case "$GITHUB_REF" in refs/tags/*) ;; *) tag="v$(cat VERSION)" ;; esac
+          gh release create "$tag" sentinel_*.deb Sentinel-*-x86_64.AppImage --generate-notes --target "$GITHUB_SHA"
 
   flatpak:
     runs-on: ubuntu-24.04
@@ -96,7 +105,7 @@ jobs:
 
   publish-flatpak:
     needs: [build, flatpak]
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || (inputs.publish && github.ref == 'refs/heads/main')
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -111,5 +120,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          tag="$GITHUB_REF_NAME"
+          case "$GITHUB_REF" in refs/tags/*) ;; *) tag="v$(cat VERSION)" ;; esac
           mv Sentinel.flatpak "Sentinel-$(cat VERSION)-x86_64.flatpak"
-          gh release upload "$GITHUB_REF_NAME" "Sentinel-$(cat VERSION)-x86_64.flatpak" --clobber
+          gh release upload "$tag" "Sentinel-$(cat VERSION)-x86_64.flatpak" --clobber
