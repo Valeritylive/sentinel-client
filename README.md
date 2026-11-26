@@ -176,7 +176,7 @@ python3 sentinel_server.py hikconnect-devices
 Пакет `sentinel-pro-server_<версия>_all.deb` (до 0.6.4.3 назывался `sentinel-server` и заменяется автоматически) ставит службу systemd от отдельного пользователя `sentinel` (база в `/var/lib/sentinel-server`, настройки в `/etc/default/sentinel-server`):
 
 ```sh
-sudo apt install ./sentinel-pro-server_0.6.4.4_all.deb
+sudo apt install ./sentinel-pro-server_0.6.4.5_all.deb
 ```
 
 При первой установке служба включается и запускается сама (слушает только `127.0.0.1`). Дальше всё делается с рабочего стола:

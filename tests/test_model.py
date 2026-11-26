@@ -53,6 +53,27 @@ class MigrationTests(_TempDb):
             cols = {r[1] for r in db.execute("PRAGMA table_info(saved_views)")}
         self.assertIn("division", cols)
 
+    def test_brand_cloud_group_renamed(self):
+        legacy = storage.add_group("Hik-Connect")
+        with storage.database() as db:
+            db.execute("INSERT INTO devices(name,host,group_id) VALUES('cam','10.0.0.1',?)", (legacy,))
+            storage._rename_brand_groups(db)
+            names = [r[0] for r in db.execute("SELECT name FROM groups")]
+            group = db.execute("SELECT g.name FROM devices d JOIN groups g ON g.id=d.group_id").fetchone()[0]
+        self.assertNotIn("Hik-Connect", names)
+        self.assertEqual(group, storage.CLOUD_GROUP_NAME)
+
+    def test_brand_cloud_group_merged_into_existing(self):
+        target = storage.add_group(storage.CLOUD_GROUP_NAME)
+        legacy = storage.add_group("Hik-Connect")
+        with storage.database() as db:
+            db.execute("INSERT INTO devices(name,host,group_id) VALUES('cam','10.0.0.1',?)", (legacy,))
+            storage._rename_brand_groups(db)
+            row = db.execute("SELECT group_id FROM devices").fetchone()[0]
+            count = db.execute("SELECT COUNT(*) FROM groups").fetchone()[0]
+        self.assertEqual(row, target)
+        self.assertEqual(count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

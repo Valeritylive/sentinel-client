@@ -31,6 +31,12 @@ MIN_PYTHON = (3, 12)       # hikcloudstream и pyezvizapi требуют Python 
 # Пакеты (AppImage, Flatpak) кладут библиотеки рядом с модулем, чтобы облако работало без установки.
 BUNDLED_LIBS = Path(__file__).resolve().parent / "cloud-libs"
 ERROR_PREFIX = "SENTINEL_CLOUD_ERROR "
+STATE_PREFIX = "SENTINEL_CLOUD_STATE "
+# Сколько облачных потоков договариваются с ретранслятором одновременно. Остальные ждут очереди:
+# три десятка одновременных запросов облако и регистратор отклоняют или не успевают обслужить.
+PARALLEL_SETTING = "cloud_parallel_connections"
+DEFAULT_PARALLEL = 4
+PAGES_CACHE_SECONDS = 120   # список ресурсов VTM общий для всех окон: не запрашивать его 30 раз подряд
 STREAM_MAIN, STREAM_SUB = 1, 2
 
 ERROR_TITLES = {
@@ -43,7 +49,33 @@ ERROR_TITLES = {
     "no_video": "облако не прислало видео в понятном формате",
     "ffmpeg": "для облачного видео нужен FFmpeg",
     "failed": "ошибка облачного потока",
+    "offline": "облако сообщает, что камера или регистратор сейчас не в сети",
+    "busy": "регистратор исчерпал число потоков через облако: откройте меньше камер или дополнительный поток",
+    "timeout": "регистратор не ответил облачному ретранслятору вовремя",
+    "token": "облачный ретранслятор не принял ключ потока",
+    "privacy": "на камере включён режим конфиденциальности",
+    "stream_type": "камера не отдаёт этот поток через облако",
 }
+# Ошибки, после которых окно само подключится снова через несколько секунд.
+RETRY_CODES = frozenset({"busy", "timeout", "token", "failed", "no_video", "negotiation"})
+
+# Коды результата ретранслятора VTM (ответ на запрос потока) → наш код ошибки.
+VTM_RESULT_CODES = {
+    5404: "offline", 5454: "offline",
+    5405: "timeout", 5452: "timeout", 5456: "timeout", 5500: "timeout", 5503: "timeout", 5504: "timeout",
+    5406: "token", 5411: "token", 5412: "token", 5413: "token",
+    5409: "privacy", 5492: "privacy",
+    5415: "not_found",
+    5416: "busy", 5457: "busy",
+    5451: "stream_type",
+}
+
+
+def vtm_error_code(result) -> str:
+    try:
+        return VTM_RESULT_CODES.get(int(result), "negotiation")
+    except (TypeError, ValueError):
+        return "negotiation"
 
 
 # ==================================================================== сторона Sentinel
@@ -124,6 +156,20 @@ def install_runtime(log=None) -> str:
     return str(python)
 
 
+def cache_dir() -> Path:
+    return runtime_dir().parent / "cloud-cache"
+
+
+def parallel_limit() -> int:
+    """Число одновременных подключений к облаку (настраивается в окне «Облако P2P»)."""
+    try:
+        import sentinel_storage as storage
+        value = int(storage.get_setting(PARALLEL_SETTING, str(DEFAULT_PARALLEL)) or DEFAULT_PARALLEL)
+    except Exception:
+        value = DEFAULT_PARALLEL
+    return max(1, min(16, value))
+
+
 def stream_kind(device) -> int:
     """Основной поток — 1, дополнительный и третий — 2 (у облака их два)."""
     return STREAM_MAIN if (device.get("stream") or "main") == "main" else STREAM_SUB
@@ -144,6 +190,8 @@ def build_request(device, session_state, validate_code="") -> dict:
         "stream": stream_kind(device),
         "ffmpeg": shutil.which("ffmpeg") or "ffmpeg",
         "validate_code": (validate_code or "").strip(),
+        "cache_dir": str(cache_dir()),
+        "parallel": parallel_limit(),
     }
 
 
@@ -152,8 +200,13 @@ class CloudStreamError(RuntimeError):
         self.code = code
         self.detail = detail
         title = ERROR_TITLES.get(code, ERROR_TITLES["failed"])
-        super().__init__(f"{title}" + (f" ({detail})" if detail and code in ("failed", "negotiation", "no_video")
-                                       else ""))
+        self.title = title
+        show_detail = detail and (code in ("failed", "negotiation", "no_video") or str(detail).startswith("code "))
+        super().__init__(f"{title}" + (f" ({detail})" if show_detail else ""))
+
+    @property
+    def retryable(self) -> bool:
+        return self.code in RETRY_CODES
 
 
 def parse_error(stderr_text) -> CloudStreamError | None:
@@ -177,6 +230,7 @@ class CloudStreamProcess:
             raise CloudStreamError("runtime")
         script = script or str(Path(__file__).resolve())
         self.stderr_lines: list[str] = []
+        self.phase = "starting"     # starting → queued → connecting → video
         self.process = subprocess.Popen(
             [python, "-I", script], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True)
@@ -191,7 +245,11 @@ class CloudStreamProcess:
 
     def _read_stderr(self):
         for raw in self.process.stderr:
-            self.stderr_lines.append(raw.decode("utf-8", "replace").rstrip())
+            line = raw.decode("utf-8", "replace").rstrip()
+            if line.startswith(STATE_PREFIX):
+                self.phase = line[len(STATE_PREFIX):].strip() or self.phase
+                continue
+            self.stderr_lines.append(line)
             del self.stderr_lines[:-50]
 
     def error(self) -> CloudStreamError | None:
@@ -386,6 +444,65 @@ def _info(text):
     sys.stderr.flush()
 
 
+def _state(phase):
+    sys.stderr.write(STATE_PREFIX + phase + "\n")
+    sys.stderr.flush()
+
+
+def _connection_slot(directory, limit, wait=None):
+    """Занять одно из ``limit`` мест (fcntl-блокировки файлов, общие для всех помощников).
+
+    Возвращает открытый файл: место свободно, пока он не закрыт (или процесс не завершён).
+    """
+    import fcntl
+    import time
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    deadline = None if wait is None else time.monotonic() + wait
+    announced = False
+    while True:
+        for index in range(max(1, int(limit))):
+            handle = open(directory / f"slot-{index}.lock", "a+")
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return handle
+            except OSError:
+                handle.close()
+        if deadline is not None and time.monotonic() >= deadline:
+            return None
+        if not announced:
+            _state("queued")
+            announced = True
+        time.sleep(0.3)
+
+
+def _cached_pages(directory, key, fetch, max_age=PAGES_CACHE_SECONDS, fresh=False):
+    """Список ресурсов VTM из общего кэша; запрашивает облако только один помощник за раз."""
+    import fcntl
+    import hashlib
+    import time
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"vtm-{hashlib.sha256(key.encode()).hexdigest()[:16]}.json"
+    with open(directory / "vtm.lock", "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not fresh:
+            try:
+                if time.time() - path.stat().st_mtime < max_age:
+                    return json.loads(path.read_text())
+            except (OSError, ValueError):
+                pass
+        pages = fetch()
+        try:
+            temp = path.with_suffix(".tmp")
+            temp.write_text(json.dumps(pages))
+            os.chmod(temp, 0o600)
+            temp.replace(path)
+        except (OSError, TypeError, ValueError):
+            pass
+        return pages
+
+
 def _all_vtm_pages(adapter):
     """Все страницы ресурсов VTM: сервер отдаёт максимум 30 за раз, а hikcloudstream читает одну."""
     merged = {"resourceInfos": [], "VTM": {}}
@@ -427,7 +544,16 @@ def helper_main() -> int:      # pragma: no cover - нужен реальный 
         return _fail("runtime", exc)
     if not shutil.which(request.get("ffmpeg") or "ffmpeg"):
         return _fail("ffmpeg")
-    hc_session.get_vtm_page_list = _all_vtm_pages
+    cache = request.get("cache_dir") or ""
+    pages_state = {"fresh": False}
+
+    def vtm_pages(adapter):
+        if not cache:
+            return _all_vtm_pages(adapter)
+        return _cached_pages(cache, f"{request['api_url']}|{request['session_id']}",
+                             lambda: _all_vtm_pages(adapter), fresh=pages_state["fresh"])
+
+    hc_session.get_vtm_page_list = vtm_pages
 
     client = HikConnectClient(ClientConfig(api_base_url=request["api_url"]))
     client.session_id = request["session_id"]
@@ -435,19 +561,52 @@ def helper_main() -> int:      # pragma: no cover - нужен реальный 
         client._feature_code = request["feature_code"]
     camera = Camera(index=0, name="", device_serial=request["serial"], channel_no=int(request["channel"]),
                     device_name="")
-    try:
-        live = hc_session.open_live_stream(client, camera, stream_type=int(request.get("stream") or 1))
-        info = live.start()
-    except Exception as exc:
-        text = str(exc)
-        if "401" in text or "session" in text.lower() and "expired" in text.lower():
-            return _fail("session", text)
-        if "could not find VTM resource" in text:
-            return _fail("not_found", text)
-        return _fail("negotiation", text)
-    if getattr(info, "result", 0) not in (0, None):
+    # Очередь: одновременно с ретранслятором договариваются не больше N окон (остальные ждут).
+    slot = _connection_slot(Path(cache) / "slots", request.get("parallel") or DEFAULT_PARALLEL) if cache else None
+    _state("connecting")
+    stream_type = int(request.get("stream") or 1)
+    live, failure = None, None
+    for attempt in range(3):
+        if attempt:
+            import time
+            time.sleep(2 * attempt)
+        try:
+            live = hc_session.open_live_stream(client, camera, stream_type=stream_type)
+            info = live.start()
+        except Exception as exc:
+            text = str(exc)
+            if live is not None:
+                live.close()
+                live = None
+            if "401" in text or "session" in text.lower() and "expired" in text.lower():
+                failure = ("session", text)
+                break
+            if "could not find VTM resource" in text:
+                failure = ("not_found", text)
+                if pages_state["fresh"] or not cache:
+                    break
+                pages_state["fresh"] = True       # кэш мог устареть: перечитать список один раз
+                continue
+            failure = ("negotiation", text)
+            continue
+        result = getattr(info, "result", 0)
+        if result in (0, None):
+            failure = None
+            break
         live.close()
-        return _fail("negotiation", f"code {info.result}")
+        live = None
+        code = vtm_error_code(result)
+        failure = (code, f"code {result}")
+        _info(f"ретранслятор: code {result} ({code}), попытка {attempt + 1}")
+        if code == "stream_type" and stream_type != STREAM_MAIN:
+            stream_type = STREAM_MAIN                # дополнительного потока через облако нет: берём основной
+            continue
+        if code not in ("timeout", "token", "negotiation"):
+            break
+    if failure is not None:
+        if slot is not None:
+            slot.close()
+        return _fail(*failure)
 
     depacketizer = RtpDepacketizer()
     ffmpeg = None
@@ -520,6 +679,10 @@ def helper_main() -> int:      # pragma: no cover - нужен реальный 
             if ffmpeg is None:
                 _info(f"видео: {codec}" + (" (зашифровано)" if depacketizer.encrypted else ""))
                 got_video.set()
+                _state("video")
+                if slot is not None:
+                    slot.close()            # место в очереди освобождаем, как только пошло видео
+                    slot = None
                 ffmpeg = _ffmpeg(request.get("ffmpeg") or "ffmpeg", codec)
             pending += chunk
             if len(pending) >= 4096 or packet.body[1] & 0x80:
@@ -531,11 +694,19 @@ def helper_main() -> int:      # pragma: no cover - нужен реальный 
         return _fail("failed", "облако закрыло поток")
     except _HelperFailure as exc:
         return _fail(exc.code)
-    except (BrokenPipeError, OSError):
-        return 0
+    except BrokenPipeError:
+        return 0                           # окно закрыто: Sentinel больше не читает поток
+    except TimeoutError:
+        return _fail("failed", "облако перестало присылать видео")
+    except OSError as exc:
+        if ffmpeg is not None and ffmpeg.poll() is not None:
+            return 0
+        return _fail("failed", f"связь с ретранслятором прервана: {exc}")
     except Exception as exc:
         return _fail("failed", exc)
     finally:
+        if slot is not None:
+            slot.close()
         live.close()
         if ffmpeg is not None:
             try:

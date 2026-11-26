@@ -20,6 +20,7 @@ from gi.repository import GLib, Gtk
 import sentinel_alarms as alarms
 import sentinel_hikconnect as hikconnect
 import sentinel_remote as remote
+import sentinel_cloudstream as cloudstream
 import sentinel_storage as storage
 import sentinel_widgets as W
 
@@ -140,6 +141,16 @@ class HikConnectPanel(Gtk.Box):
         self.append(form)
         self.append(_row(_spacer(), W.button("Добавить выбранные", lambda: self.import_devices(False), "red-button"),
                          W.button("Добавить все в сети", lambda: self.import_devices(True))))
+
+        self.append(W.label("5. Видео через облако", "section-title"))
+        self.parallel = Gtk.SpinButton.new_with_range(1, 16, 1)
+        self.parallel.set_value(cloudstream.parallel_limit())
+        self.parallel.connect("value-changed", lambda spin: storage.set_setting(
+            cloudstream.PARALLEL_SETTING, spin.get_value_as_int()))
+        self.append(_row(W.label("Одновременных подключений к облаку"), self.parallel, _spacer()))
+        self.append(W.label("Когда в виде много облачных камер, они подключаются по очереди: облачный "
+                            "ретранслятор и регистратор отклоняют десятки одновременных запросов. Уже "
+                            "идущее видео место в очереди не занимает.", "muted", wrap=True))
         self.refresh()
 
     # ------------------------------------------------------------ режим и данные

@@ -182,5 +182,67 @@ class ProcessTests(unittest.TestCase):
             self.assertIsNotNone(proc.process.poll())
 
 
+class CloudQueueTests(unittest.TestCase):
+    def test_vtm_result_codes(self):
+        self.assertEqual(cs.vtm_error_code(5404), "offline")
+        self.assertEqual(cs.vtm_error_code("5416"), "busy")
+        self.assertEqual(cs.vtm_error_code(1), "negotiation")
+        error = cs.CloudStreamError("offline", "code 5404")
+        self.assertIn("не в сети", str(error))
+        self.assertIn("5404", str(error))
+        self.assertFalse(error.retryable)
+        self.assertTrue(cs.CloudStreamError("busy", "code 5416").retryable)
+
+    def test_connection_slots_limit_parallel_helpers(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            first = cs._connection_slot(tmp, 2, wait=0)
+            second = cs._connection_slot(tmp, 2, wait=0)
+            self.assertIsNotNone(first)
+            self.assertIsNotNone(second)
+            # flock привязан к открытому файлу, поэтому третий открытый файл в том же процессе не получит место
+            self.assertIsNone(cs._connection_slot(tmp, 2, wait=0))
+            first.close()
+            third = cs._connection_slot(tmp, 2, wait=0)
+            self.assertIsNotNone(third)
+            second.close()
+            third.close()
+
+    def test_vtm_pages_cached_between_helpers(self):
+        import tempfile
+        calls = []
+
+        def fetch():
+            calls.append(1)
+            return {"resourceInfos": [{"deviceSerial": "X"}], "VTM": {}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            first = cs._cached_pages(tmp, "key", fetch)
+            second = cs._cached_pages(tmp, "key", fetch)
+            self.assertEqual(first, second)
+            self.assertEqual(len(calls), 1)
+            cs._cached_pages(tmp, "key", fetch, fresh=True)
+            cs._cached_pages(tmp, "other", fetch)
+            self.assertEqual(len(calls), 3)
+
+    def test_state_lines_set_phase_not_error(self):
+        process = cs.CloudStreamProcess.__new__(cs.CloudStreamProcess)
+        process.stderr_lines, process.phase = [], "starting"
+
+        class Pipe:
+            def __iter__(self):
+                return iter([b"SENTINEL_CLOUD_STATE queued\n", b"SENTINEL_CLOUD_STATE connecting\n",
+                             b'SENTINEL_CLOUD_ERROR {"code": "offline", "detail": "code 5404"}\n'])
+
+        process.process = type("P", (), {"stderr": Pipe()})()
+        process._read_stderr()
+        self.assertEqual(process.phase, "connecting")
+        self.assertEqual(parse(process.stderr_lines).code, "offline")
+
+
+def parse(lines):
+    return cs.parse_error("\n".join(lines))
+
+
 if __name__ == "__main__":
     unittest.main()
