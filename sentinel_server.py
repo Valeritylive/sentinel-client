@@ -41,6 +41,7 @@ import sentinel_alarms as alarms  # noqa: E402
 import sentinel_engine as engine_mod  # noqa: E402
 import sentinel_hikconnect as hikconnect  # noqa: E402
 import sentinel_arming as arming  # noqa: E402
+import sentinel_cluster as cluster  # noqa: E402
 import sentinel_security as security  # noqa: E402
 import sentinel_shared_views as shared_views  # noqa: E402
 import sentinel_storage as storage  # noqa: E402
@@ -124,6 +125,7 @@ class SentinelServer(ThreadingHTTPServer):
     def __init__(self, address, engine, tokens=None, tls_context=None):
         super().__init__(address, RequestHandler)
         self.engine = engine
+        self.cluster = None        # ClusterNode при работе в паре основной/резервный
         self.tokens = tokens or TokenStore()
         self.stopping = threading.Event()
         if tls_context is not None:
@@ -136,6 +138,7 @@ class SentinelServer(ThreadingHTTPServer):
 
 
 ROUTES = []
+PASSIVE_ALLOWED = (API + "/health", API + "/auth/", API + "/cluster/")
 
 
 def route(method, pattern, permission=None, auth=True):
@@ -210,6 +213,12 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.query = query
         self.session = None
         try:
+            node = self.server.cluster
+            if node is not None and not node.active and not parsed.path.startswith(PASSIVE_ALLOWED):
+                self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {
+                    "error": "Это резервный узел кластера Sentinel, сейчас работает другой узел",
+                    "standby": True, "active_url": node.config["peer_url"]})
+                return
             for route_method, regex, permission, auth, func in ROUTES:
                 match = regex.match(parsed.path)
                 if not match or route_method != method:
@@ -284,7 +293,85 @@ def _session_payload(session):
 # ==================================================================== маршруты: система и вход
 @route("GET", "/health", auth=False)
 def health(h, _body):
-    return {"status": "ok", "version": VERSION, "server": "sentinel", "setup_required": not security.has_users()}
+    node = h.server.cluster
+    return {"status": "ok", "version": VERSION, "server": "sentinel", "setup_required": not security.has_users(),
+            "active": node is None or node.active,
+            "cluster": None if node is None else {"role": node.role, "node": node.config["node"],
+                                                  "active": node.active, "peer_url": node.config["peer_url"]}}
+
+
+# ------------------------------------------------------------ кластер (горячий резерв)
+def _cluster_peer(h):
+    node = h.server.cluster
+    if node is None:
+        raise ApiError(HTTPStatus.NOT_FOUND, "Кластер не настроен")
+    path = urllib.parse.urlsplit(h.path).path
+    if not cluster.verify(node.config["key"], h.command, path, h.headers):
+        raise ApiError(HTTPStatus.FORBIDDEN, "Неверная подпись узла кластера")
+    return node
+
+
+@route("GET", "/cluster/heartbeat", auth=False)
+def cluster_heartbeat(h, _body):
+    return _cluster_peer(h).heartbeat()
+
+
+@route("GET", "/cluster/snapshot", auth=False)
+def cluster_snapshot(h, _body):
+    node = _cluster_peer(h)
+    if not node.active:
+        raise ApiError(HTTPStatus.CONFLICT, "Снимок отдаёт только активный узел")
+    version = cluster.db_version()
+    data, digest = cluster.make_snapshot()
+    h.send_response(HTTPStatus.OK)
+    h.send_header("Content-Type", "application/zip")
+    h.send_header("Content-Length", str(len(data)))
+    h.send_header("X-Snapshot-SHA256", digest)
+    h.send_header("X-Snapshot-Version", version)
+    h.send_header("Cache-Control", "no-store")
+    h.end_headers()
+    h.wfile.write(data)
+    return None
+
+
+@route("POST", "/cluster/demote", auth=False)
+def cluster_demote(h, _body):
+    node = _cluster_peer(h)
+    node.demote("Основной узел забрал роль обратно (failback)")
+    return {"ok": True}
+
+
+def _cluster_node(h):
+    if h.server.cluster is None:
+        raise ApiError(HTTPStatus.NOT_FOUND, "Сервер работает без резерва (одиночный)")
+    return h.server.cluster
+
+
+@route("GET", "/cluster/status", "system")
+def cluster_status(h, _body):
+    node = h.server.cluster
+    return node.status() if node else {"role": cluster.STANDALONE, "role_title": cluster.ROLE_TITLES[cluster.STANDALONE],
+                                       "active": True}
+
+
+@route("POST", "/cluster/promote", "system")
+def cluster_promote(h, _body):
+    try:
+        _cluster_node(h).promote(f"Ручное переключение: {h.session.username}")
+    except cluster.ClusterError as exc:
+        raise ApiError(HTTPStatus.CONFLICT, str(exc)) from exc
+    h.audit("Кластер: резервный узел принял работу")
+    return {"ok": True}
+
+
+@route("POST", "/cluster/failback", "system")
+def cluster_failback(h, _body):
+    try:
+        _cluster_node(h).failback()
+    except cluster.ClusterError as exc:
+        raise ApiError(HTTPStatus.CONFLICT, str(exc)) from exc
+    h.audit("Кластер: роль возвращена основному узлу")
+    return {"ok": True}
 
 
 @route("POST", "/auth/login", auth=False)
@@ -314,8 +401,11 @@ def me(h, _body):
 
 @route("GET", "/system")
 def system_info(h, _body):
+    node = h.server.cluster
+    cluster_info = None if node is None else {"role": node.role, "node": node.config["node"], "active": node.active,
+                                              "promoted": node.promoted, "peer_ok": not node.peer_error}
     return {"version": VERSION, "time": engine_mod.now_iso(), "sessions": h.server.tokens.count(),
-            **h.engine.summary()}
+            "cluster": cluster_info, **h.engine.summary()}
 
 
 @route("GET", "/log", "system")
@@ -742,6 +832,32 @@ def _is_loopback(host):
         return host in ("localhost",)
 
 
+def attach_cluster(server, config, new_engine, transport=None, background=True):
+    """Узел кластера: службы (engine) работают только на активном узле."""
+    def activate():
+        if server.engine._threads:
+            return
+        server.engine = new_engine()
+        server.engine.start()
+        server.engine.bus.publish("notice", {"message": f"Узел «{node.config['node']}» стал активным"})
+        log.warning("Кластер: узел активен, службы запущены")
+
+    def deactivate():
+        old = server.engine
+        server.engine = new_engine()       # не запущенный: только для сводки
+        old.bus.publish("notice", {"message": "Узел переходит в режим ожидания", "error": True})
+        old.stop()
+        server.tokens = TokenStore()       # клиенты перейдут на активный узел
+        log.warning("Кластер: узел в режиме ожидания, службы остановлены")
+
+    node = cluster.ClusterNode(config, transport or cluster.http_transport(cluster.validate(config)), activate,
+                               deactivate)
+    server.cluster = node
+    node.start(background)
+    log.info("Кластер: роль %s, узел %s, второй узел %s", node.role, node.config["node"], node.config["peer_url"])
+    return node
+
+
 def make_server(host="127.0.0.1", port=DEFAULT_PORT, engine=None, tls=None):
     engine = engine or engine_mod.Engine()
     return SentinelServer((host, port), engine, tls_context=tls)
@@ -758,10 +874,17 @@ def cmd_run(args):
         log.warning("TLS выключен на сетевом интерфейсе %s — используйте только в доверенной сети", args.host)
     if not security.has_users():
         log.warning("Пользователи не созданы: вход в сервер невозможен до «sentinel-server create-admin»")
-    engine = engine_mod.Engine(receive_events=not args.no_events, recording_enabled=not args.no_recording,
-                               status_interval=args.status_interval, cloud_interval=args.cloud_interval)
+    def new_engine():
+        return engine_mod.Engine(receive_events=not args.no_events, recording_enabled=not args.no_recording,
+                                 status_interval=args.status_interval, cloud_interval=args.cloud_interval)
+
+    engine = new_engine()
     server = make_server(args.host, args.port, engine, tls)
-    engine.start()
+    config = cluster.load_config()
+    if config["role"] == cluster.STANDALONE:
+        engine.start()
+    else:
+        server.cluster = attach_cluster(server, config, new_engine)
 
     def stop(*_args):
         threading.Thread(target=server.shutdown, daemon=True).start()
@@ -774,7 +897,9 @@ def cmd_run(args):
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
-        engine.stop()
+        if server.cluster is not None:
+            server.cluster.stop()
+        server.engine.stop()
         server.server_close()
         log.info("Остановлен")
 
@@ -818,7 +943,32 @@ def cmd_hikconnect_devices(_args):
               f" {d['local_ip'] or d['wan_ip']}")
 
 
-COMMANDS = ("run", "create-admin", "hikconnect-login", "hikconnect-devices")
+COMMANDS = ("run", "create-admin", "hikconnect-login", "hikconnect-devices", "cluster-init", "cluster-status")
+
+
+def cmd_cluster_init(args):
+    config = cluster.load_config()
+    config.update(role=args.role, peer_url=args.peer or "", node=args.node or config["node"],
+                  witness=args.witness or "", failover=args.failover, heartbeat=args.heartbeat,
+                  verify_tls=not args.no_verify_tls, ca_file=args.ca_file or "")
+    if args.role != cluster.STANDALONE:
+        config["key"] = args.key or config.get("key") or cluster.new_key()
+    try:
+        saved = cluster.save_config(config)
+    except cluster.ClusterError as exc:
+        raise SystemExit(f"Ошибка: {exc}") from exc
+    print(f"Кластер: {cluster.ROLE_TITLES[saved['role']]} узел «{saved['node']}» → {saved['peer_url'] or '—'}")
+    if saved["role"] != cluster.STANDALONE and not args.key:
+        print("Общий ключ (укажите его на втором узле через --key):")
+        print(saved["key"])
+    print("Перезапустите сервер, чтобы применить.")
+
+
+def cmd_cluster_status(_args):
+    config = cluster.load_config()
+    print(f"Роль: {cluster.ROLE_TITLES[config['role']]} · узел {config['node']} · второй узел "
+          f"{config['peer_url'] or '—'} · переключение через {config['failover']} с · контрольный узел "
+          f"{config['witness'] or 'нет'}")
 
 
 def build_parser():
@@ -852,6 +1002,17 @@ def build_parser():
     hc_login.add_argument("--api-url")
     hc_login.add_argument("--remember", action="store_true", help="хранить пароль для автопродления")
     sub.add_parser("hikconnect-devices", parents=[common], help="показать устройства аккаунтов Hik-Connect")
+    init = sub.add_parser("cluster-init", parents=[common], help="настроить горячий резерв (основной/резервный)")
+    init.add_argument("--role", required=True, choices=(cluster.STANDALONE, cluster.PRIMARY, cluster.STANDBY))
+    init.add_argument("--peer", help="адрес второго узла, например https://10.0.0.2:8765")
+    init.add_argument("--node", help="имя этого узла")
+    init.add_argument("--key", help="общий ключ (на втором узле — ключ, выданный первым)")
+    init.add_argument("--witness", help="контрольный узел host:port (например, шлюз 10.0.0.1:80)")
+    init.add_argument("--failover", type=int, default=30, help="через сколько секунд без ответа переключаться")
+    init.add_argument("--heartbeat", type=int, default=5)
+    init.add_argument("--no-verify-tls", action="store_true", help="не проверять сертификат второго узла")
+    init.add_argument("--ca-file", help="сертификат CA второго узла")
+    sub.add_parser("cluster-status", parents=[common], help="показать настройки кластера")
     return parser
 
 
@@ -868,7 +1029,8 @@ def main(argv=None):
         storage.DATA = Path(args.data_dir).expanduser()
         storage.DB_PATH = storage.DATA / "devices.sqlite3"
     handlers = {"run": cmd_run, "create-admin": cmd_create_admin, "hikconnect-login": cmd_hikconnect_login,
-                "hikconnect-devices": cmd_hikconnect_devices}
+                "hikconnect-devices": cmd_hikconnect_devices, "cluster-init": cmd_cluster_init,
+                "cluster-status": cmd_cluster_status}
     try:
         handlers[args.command](args)
     except (ValueError, hikconnect.HikConnectError, storage.CredentialStoreError) as exc:
