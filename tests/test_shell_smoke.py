@@ -40,14 +40,74 @@ class LayoutSmoke(ShellSmoke):
         self.assertEqual(len(self.win.video_slots), 4)
         self.assertEqual(self.win.stack.get_visible_child_name(), "overview")
 
-    def test_modules_open_inner_window_and_close(self):
+    def test_modules_open_as_tabs(self):
         w = self.win
-        for key, page in (("playback", "archive"), ("events", "alarms"), ("emap", "emap"),
+        self.assertEqual(w.module_tabs.active, "home")
+        self.assertEqual(w.page_stack.get_visible_child_name(), "home")
+        for key, page in (("archive", "archive"), ("events", "alarms"), ("emap", "emap"),
                           ("summary", "dashboard"), ("local_files", "local_files"), ("access", "access")):
             w._show_module(key)
+            self.assertEqual(w.page_stack.get_visible_child_name(), "modules")
             self.assertEqual(w.stack.get_visible_child_name(), page)
+            self.assertFalse(w.left_revealer.get_visible())   # разделы — на всю ширину
+        self.assertEqual(w.module_tabs.tabs, ["archive", "events", "emap", "summary", "local_files", "access"])
         w._show_module("main_view")
-        self.assertEqual(w.stack.get_visible_child_name(), "overview")
+        self.assertEqual(w.page_stack.get_visible_child_name(), "workspace")
+        w.close_module_tab("main_view")
+        self.assertEqual(w.module_tabs.active, "access")
+
+    def test_live_tab_has_no_timeline_and_playback_tab_has(self):
+        w = self.win
+        w._show_module("main_view")
+        self.assertEqual(w.bar_mode, "live")
+        self.assertFalse(w.timeline_line.get_visible())
+        self.assertFalse(w.playback_controls.get_visible())
+        self.assertTrue(w.view_strip.get_visible())
+        w._show_module("playback")
+        self.assertEqual(w.bar_mode, "playback")
+        self.assertTrue(w.timeline_line.get_visible())
+        self.assertTrue(w.playback_controls.get_visible())
+        self.assertEqual(w.module_tabs.tabs, ["main_view", "playback"])
+        w._show_module("main_view")
+        self.assertEqual(w.bar_mode, "live")
+        w._show_module("playback")
+        w.close_module_tab("playback")
+        self.assertEqual(w.bar_mode, "live")
+        self.assertEqual(w.module_tabs.active, "main_view")
+
+    def test_live_and_playback_have_separate_grids(self):
+        w = self.win
+        w._show_module("main_view")
+        w._set_division("s9")
+        live_state = {"pipeline": None, "base_device": {"id": 1}, "credentials": {}, "playback": False}
+        w.streams[2] = live_state
+        live_grid = w.camera_grid
+        w._show_module("playback")
+        self.assertIsNot(w.camera_grid, live_grid)
+        self.assertEqual(w.streams, {})                 # своя пустая сетка воспроизведения
+        self.assertEqual(w.layout_count, 4)
+        w._set_division("s1")
+        w._show_module("main_view")
+        self.assertIs(w.camera_grid, live_grid)          # живые окна на месте
+        self.assertIs(w.streams[2], live_state)
+        self.assertEqual(w.layout_count, 9)
+        w._show_module("playback")
+        self.assertEqual(w.layout_count, 1)
+        self.assertEqual(len(w._all_grid_states()), 1)
+        w.streams.clear()
+        w.close_module_tab("playback")
+        self.assertEqual(w.grid_context, "live")
+        self.assertIs(w.streams[2], live_state)
+
+    def test_start_module_setting(self):
+        import sentinel_dashboard as dash
+        self.assertEqual(dash.start_module(), "home")
+        dash.set_start_module("main_view")
+        self.assertEqual(dash.start_module(), "main_view")
+        dash.set_start_module("nope")
+        self.assertEqual(dash.start_module(), "home")
+        dash.set_start_on_dashboard(True)
+        self.assertTrue(dash.start_on_dashboard())
 
     def test_adaptive_layout_applies(self):
         decision = self.win._apply_adaptive(700)

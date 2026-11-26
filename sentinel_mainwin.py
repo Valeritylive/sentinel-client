@@ -24,6 +24,7 @@ import sentinel_arming as arming
 import sentinel_dashboard as dash
 import sentinel_devmgmt as devmgmt
 import sentinel_layouts as layouts
+import sentinel_module_art as module_art
 import sentinel_people as people
 import sentinel_recording as recording
 import sentinel_reports as reports
@@ -48,8 +49,30 @@ MODULE_PAGES = {
 PAGE_TITLES = {"board": "Панель мониторинга", "archive": "Поиск записей", "alarms": "Центр событий", "emap": "Электронная карта",
                "access": "Контроль доступа", "dashboard": "Статистика", "local_files": "Локальные файлы",
                "parking": "Парковка", "wall": "Видеостена", "patrol": "Патрулирование", "evidence": "Доказательства"}
+# Старые ключи разделов → ключи вкладок.
+MODULE_ALIASES = {"overview": "main_view", "alarms": "events", "dashboard": "summary", "logs": "summary"}
 SYSTEM_MODULES = {"devices": "devices", "event_config": "event", "storage": "config:storage",
                   "accounts": "accounts", "settings": "config"}
+
+
+class _HalfSizePaintable(GObject.Object, Gdk.Paintable):
+    """Текстура, нарисованная в 2× (для HiDPI), с естественным размером вдвое меньше."""
+
+    def __init__(self, texture):
+        super().__init__()
+        self.texture = texture
+
+    def do_snapshot(self, snapshot, width, height):
+        self.texture.snapshot(snapshot, width, height)
+
+    def do_get_intrinsic_width(self):
+        return self.texture.get_width() // 2
+
+    def do_get_intrinsic_height(self):
+        return self.texture.get_height() // 2
+
+    def do_get_intrinsic_aspect_ratio(self):
+        return self.texture.get_width() / max(1, self.texture.get_height())
 
 
 class MainWindowMixin:
@@ -92,13 +115,25 @@ class MainWindowMixin:
         self.group_list = None
 
         workspace = self._overview_page()
-        self.inner_window = W.InnerWindow(self._close_inner)
-        self.inner_window.content.add_named(self.stack, "modules")
-        self.inner_window.set_visible(False)
+        # Вкладки разделов как в iVMS-4200: «Главная» с плитками разделов, «Главный просмотр»
+        # и «Удалённое воспроизведение» (одна видеосетка, разный режим) и страницы модулей.
+        self.module_tabs = shell.TabModel()
+        self.page_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
+        self.page_stack.set_hexpand(True)
+        self.page_stack.set_vexpand(True)
+        self.home_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        home_scroll = Gtk.ScrolledWindow()
+        home_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        home_scroll.set_child(self.home_box)
+        self.page_stack.add_named(home_scroll, shell.HOME)
+        self.page_stack.add_named(workspace, "workspace")
+        module_scroll = Gtk.ScrolledWindow()
+        module_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        module_scroll.set_child(self.stack)
+        self.page_stack.add_named(module_scroll, "modules")
         self.toast = W.Toast()
         center = Gtk.Overlay()
-        center.set_child(workspace)
-        center.add_overlay(self.inner_window)
+        center.set_child(self.page_stack)
         center.add_overlay(self.toast)
         center.set_hexpand(True)
         center.set_vexpand(True)
@@ -144,17 +179,18 @@ class MainWindowMixin:
         GLib.timeout_add(500, self._timeline_tick)
         self._new_view_tab()
         self.apply_role()
-        if dash.start_on_dashboard():
-            GLib.idle_add(lambda: (self._show_module("board"), False)[1])
+        self._show_module(shell.HOME)
+        start = dash.start_module()
+        if start != shell.HOME:
+            GLib.idle_add(lambda: (self._show_module(start), False)[1])
 
     def _build_header(self):
         header = Gtk.HeaderBar()
         header.set_show_title_buttons(True)
-        logo = W.button("⬢", lambda: self._show_module("board"), "hcl-logo", "Панель мониторинга", flat=True)
+        logo = W.button("⬢", lambda: self._show_module(shell.HOME), "hcl-logo", "Главная: выбор раздела", flat=True)
         header.pack_start(logo)
-        self.view_tab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
-        header.pack_start(self.view_tab_box)
-        header.pack_start(W.button("＋", self._new_view_tab, tooltip="Новый вид", flat=True))
+        self.module_tab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        header.pack_start(self.module_tab_box)
         header.set_title_widget(Gtk.Label(label=""))
         self.header_buttons = {}
         lock = W.button("🔒", self.lock_client, tooltip="Заблокировать клиент")
@@ -394,6 +430,13 @@ class MainWindowMixin:
     def _overview_page(self):
         workspace = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         workspace.add_css_class("workspace")
+        view_strip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        view_strip.add_css_class("view-strip")
+        self.view_tab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        view_strip.append(self.view_tab_box)
+        view_strip.append(W.button("＋", self._new_view_tab, tooltip="Новый вид (Ctrl+T)", flat=True))
+        self.view_strip = view_strip
+        workspace.append(view_strip)
         self.door_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
         self.door_bar.add_css_class("door-bar")
         self.door_bar_label = W.label("")
@@ -401,10 +444,7 @@ class MainWindowMixin:
         self.door_bar.set_visible(False)
         workspace.append(self.door_bar)
 
-        self.camera_grid = Gtk.Grid(column_spacing=1, row_spacing=1)
-        self.camera_grid.set_hexpand(True)
-        self.camera_grid.set_column_homogeneous(True)
-        self.camera_grid.set_valign(Gtk.Align.START)
+        self.camera_grid = self._new_camera_grid()
         camera_scroll = Gtk.ScrolledWindow()
         camera_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         camera_scroll.set_hexpand(True)
@@ -432,8 +472,77 @@ class MainWindowMixin:
         self.cell_layout = None
         self.selected_slot = 0
         self.video_slots = []
+        self.grid_context = "live"
+        self.grid_contexts = {}
+        self.playback_planned = {}
         self._render_video_grid()
         return workspace
+
+    @staticmethod
+    def _new_camera_grid():
+        grid = Gtk.Grid(column_spacing=1, row_spacing=1)
+        grid.set_hexpand(True)
+        grid.set_column_homogeneous(True)
+        grid.set_valign(Gtk.Align.START)
+        return grid
+
+    # ------------------------------------------------------------------ две видеосетки
+    # «Главный просмотр» и «Удалённое воспроизведение» — разные сетки, как в iVMS-4200:
+    # живые потоки продолжают идти, пока открыта вкладка воспроизведения, и наоборот.
+    GRID_ATTRS = ("streams", "video_slots", "camera_grid", "layout_count", "grid_columns", "grid_rows",
+                  "division", "cell_layout", "selected_slot", "maximized_slot", "slot_resources",
+                  "archive_player_slot")
+
+    def _switch_grid(self, name):
+        if self.__dict__.get("grid_context", "live") == name:
+            return
+        if self.maximized_slot is not None:
+            self._restore_maximized_slot()
+        self.grid_contexts[self.grid_context] = {a: self.__dict__.get(a) for a in self.GRID_ATTRS}
+        saved = self.grid_contexts.pop(name, None)
+        self.grid_context = name
+        fresh = saved is None
+        if fresh:
+            division = layouts.DIVISIONS["s4"]
+            saved = {"streams": {}, "video_slots": [], "camera_grid": self._new_camera_grid(),
+                     "layout_count": division.count, "grid_columns": division.cols, "grid_rows": division.rows,
+                     "division": division.key, "cell_layout": list(division.cells), "selected_slot": 0,
+                     "maximized_slot": None, "slot_resources": {}, "archive_player_slot": None}
+        for attr, value in saved.items():
+            setattr(self, attr, value)
+        self.camera_scroll.set_child(self.camera_grid)
+        if fresh:
+            self._render_video_grid()
+        self._update_layout_button()
+        self._update_door_bar()
+        self._update_stream_count()
+
+    def _all_grid_states(self):
+        """Потоки всех сеток (текущей и скрытой)."""
+        states = list(self.streams.values())
+        for saved in self.__dict__.get("grid_contexts", {}).values():
+            states += list((saved.get("streams") or {}).values())
+        return states
+
+    def _stop_grid(self, name):
+        """Остановить все потоки сетки name (в том числе скрытой)."""
+        current = self.__dict__.get("grid_context", "live")
+        if current != name and name not in self.__dict__.get("grid_contexts", {}):
+            return
+        self._switch_grid(name)
+        self.stop_all_streams()
+        if name == "playback":
+            self.playback_planned = {}
+        self._switch_grid(current)
+
+    def _place_camera(self, slot, camera, credentials):
+        """Камера в окно текущей сетки: живое видео или архив с момента под курсором шкалы."""
+        if self.__dict__.get("grid_context", "live") != "playback":
+            self._start_preview(slot, camera, credentials)
+            return
+        self.playback_planned[slot] = camera["id"]
+        self._select_slot(slot)
+        self._play_slot_at(slot, camera, dict(credentials), self.timeline.model.cursor)
 
     def _build_bottom_bar(self):
         bar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
@@ -488,22 +597,26 @@ class MainWindowMixin:
         zoom.append(self.zoom_label)
         zoom.append(W.button("+", lambda: self.zoom_timeline(+1), flat=True, tooltip="Увеличить масштаб"))
         line.append(zoom)
+        self.timeline_line = line
         self.timeline_area.append(line)
 
         controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        playback_controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.playback_controls = playback_controls
         self.bar_stop_button = W.button("■", self.stop_playback_mode, flat=True, tooltip="Остановить воспроизведение")
-        controls.append(self.bar_stop_button)
+        playback_controls.append(self.bar_stop_button)
         self.bar_play_button = W.button("Ⅱ", self.bar_play_pause, "round-button", "Пауза / продолжить")
-        controls.append(self.bar_play_button)
-        controls.append(W.button("↺30", lambda: self.bar_jump(-30), flat=True, tooltip="Назад на 30 секунд"))
-        controls.append(W.button("30↻", lambda: self.bar_jump(30), flat=True, tooltip="Вперёд на 30 секунд"))
-        controls.append(W.button("|▷", self.bar_step, flat=True, tooltip="Следующий кадр (на паузе)"))
-        controls.append(W.button("«", lambda: self.bar_speed(-1), flat=True, tooltip="Медленнее"))
+        playback_controls.append(self.bar_play_button)
+        playback_controls.append(W.button("↺30", lambda: self.bar_jump(-30), flat=True, tooltip="Назад на 30 секунд"))
+        playback_controls.append(W.button("30↻", lambda: self.bar_jump(30), flat=True, tooltip="Вперёд на 30 секунд"))
+        playback_controls.append(W.button("|▷", self.bar_step, flat=True, tooltip="Следующий кадр (на паузе)"))
+        playback_controls.append(W.button("«", lambda: self.bar_speed(-1), flat=True, tooltip="Медленнее"))
         self.bar_speed_label = W.label("1x", xalign=0.5)
         self.bar_speed_label.set_size_request(36, -1)
-        controls.append(self.bar_speed_label)
-        controls.append(W.button("»", lambda: self.bar_speed(+1), flat=True, tooltip="Быстрее"))
-        controls.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+        playback_controls.append(self.bar_speed_label)
+        playback_controls.append(W.button("»", lambda: self.bar_speed(+1), flat=True, tooltip="Быстрее"))
+        playback_controls.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+        controls.append(playback_controls)
         controls.append(self._live_toolbar())
         spacer = Gtk.Box()
         spacer.set_hexpand(True)
@@ -512,6 +625,7 @@ class MainWindowMixin:
         self.bar_date_button.set_tooltip_text("Перейти к дате и времени")
         self.bar_date_button.set_popover(self._date_popover())
         controls.append(self.bar_date_button)
+        self.top_bar_row = top
         self.timeline_area.append(controls)
         bar.append(self.timeline_area)
         self._update_bar_controls()
@@ -530,6 +644,7 @@ class MainWindowMixin:
         self.audio_button.set_label("🔇")
         box.append(self.audio_button)
         instant = Gtk.MenuButton(label="⏪")
+        self.instant_button = instant
         instant.set_tooltip_text("Мгновенный повтор")
         popover = Gtk.Popover()
         items = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
@@ -630,15 +745,19 @@ class MainWindowMixin:
         decision = views.adaptive_layout(width, self.user_left_panel, self.user_right_panel)
         # Скрытый Gtk.Revealer в GTK 4 продолжает занимать ширину панели —
         # поэтому свёрнутую панель убираем из раскладки целиком.
+        # Панели ресурсов и тревог — только у видеосетки; разделы открываются на всю ширину.
+        grid = "module_tabs" not in self.__dict__ or self._workspace_shown()
         for revealer, show in ((self.left_revealer, decision.left), (self.right_revealer, decision.right)):
-            revealer.set_reveal_child(show)
-            revealer.set_visible(show)
+            revealer.set_reveal_child(show and grid)
+            revealer.set_visible(show and grid)
+        self.left_handle.set_visible(grid)
+        self.right_handle.set_visible(grid)
         self.left_panel.set_size_request(decision.left_width, -1)
         self.right_panel.set_size_request(decision.right_width, -1)
         self.left_handle.set_label("‹" if decision.left else "›")
         self.right_handle.set_label("›" if decision.right else "‹")
         self.timeline_filters.set_visible(not decision.compact_bar)
-        self.auto_interval_choice.set_visible(not decision.compact_bar)
+        self.auto_interval_choice.set_visible(not decision.compact_bar and self.bar_mode != "playback")
         self.stream_count_label.set_visible(not decision.compact_bar)
         for key, widget in self.header_buttons.items():
             full = {"system": "⚙ Система", "search": "⌕ Поиск"}[key]
@@ -670,16 +789,13 @@ class MainWindowMixin:
         if keyval == Gdk.KEY_F11:
             self.toggle_fullscreen()
             return True
-        if not hasattr(self, "inner_window"):  # дополнительные окна просмотра
+        if "module_tabs" not in self.__dict__:  # дополнительные окна просмотра
             return False
-        if keyval == Gdk.KEY_Escape and self.inner_window.get_visible():
-            self._close_inner()
-            return True
         if keyval == Gdk.KEY_F11:
             self.toggle_fullscreen()
             return True
         ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
-        if ctrl and keyval in (Gdk.KEY_t, Gdk.KEY_T):
+        if ctrl and keyval in (Gdk.KEY_t, Gdk.KEY_T) and self.grid_context == "live":
             self._new_view_tab()
             return True
         if ctrl and keyval in (Gdk.KEY_s, Gdk.KEY_S):
@@ -695,20 +811,36 @@ class MainWindowMixin:
 
     # ================================================================== модули
     def _show_module(self, key):
-        if not dash.module_allowed(self.session, key):
+        """Открыть раздел вкладкой (или окно «Система» для разделов конфигурации)."""
+        key = MODULE_ALIASES.get(key, key)
+        if key != shell.HOME and not dash.module_allowed(self.session, key):
             self.notify("Нет прав на этот раздел", error=True)
             return
         if key in SYSTEM_MODULES:
             section, _, sub = SYSTEM_MODULES[key].partition(":")
             self.open_system(section, sub or None)
             return
-        page = MODULE_PAGES.get(key, key if key in PAGE_TITLES else "overview")
-        if page == "overview":
-            self._close_inner()
-            return
-        self.stack.set_visible_child_name(page)
-        self.inner_window.title.set_text(PAGE_TITLES.get(page, ""))
-        self.inner_window.set_visible(True)
+        if not shell.is_tab(key):
+            key = "main_view"
+        self.module_tabs.open(key)
+        self._render_module_tabs()
+        self._activate_module_page(key)
+
+    def _activate_module_page(self, key):
+        page = shell.page_name(key)
+        if page == shell.HOME:
+            self._render_home()
+            self.page_stack.set_visible_child_name(shell.HOME)
+        elif page in shell.WORKSPACE_PAGES:
+            self.page_stack.set_visible_child_name("workspace")
+            self._apply_workspace_mode(page)
+        else:
+            self.stack.set_visible_child_name(page)
+            self.page_stack.set_visible_child_name("modules")
+            self._refresh_module_page(page)
+        self._apply_side_panels()
+
+    def _refresh_module_page(self, page):
         if page == "archive":
             self._refresh_archive_choices()
         elif page == "emap":
@@ -731,6 +863,168 @@ class MainWindowMixin:
             self._render_patrol()
         elif page == "evidence":
             self._render_evidence()
+
+    def _workspace_shown(self):
+        return shell.page_name(self.module_tabs.active) in shell.WORKSPACE_PAGES
+
+    def _module_page_shown(self, page):
+        """Открыта ли сейчас вкладка со страницей модуля page (имя страницы Gtk.Stack)."""
+        return shell.page_name(self.module_tabs.active) == page
+
+    def _apply_workspace_mode(self, mode):
+        """«Главный просмотр» — только живое видео без шкалы; «Удалённое воспроизведение» — со шкалой."""
+        playback = mode == "playback"
+        self.view_strip.set_visible(not playback)
+        self.top_bar_row.set_visible(playback)
+        self.timeline_line.set_visible(playback)
+        self.playback_controls.set_visible(playback)
+        self.bar_date_button.set_visible(playback)
+        # Режим задаёт вкладка; кнопки живого просмотра в воспроизведении не нужны.
+        self.live_mode_button.set_visible(False)
+        self.playback_mode_button.set_visible(False)
+        for widget in (self.instant_button, self.auto_switch_button, self.auto_interval_choice):
+            widget.set_visible(not playback)
+        if not playback:
+            self.timeline_area.set_visible(True)
+        else:
+            self.timeline_area.set_visible(not self.bar_collapsed)
+        if playback and not self.session.can("playback"):
+            self.notify("Нет прав на воспроизведение", error=True)
+            self.close_module_tab("playback")
+            return
+        self._switch_grid("playback" if playback else "live")
+        self._syncing_tab = True
+        try:
+            self.set_bar_mode(mode)
+        finally:
+            self._syncing_tab = False
+
+    def _sync_tab_with_mode(self):
+        """Воспроизведение запущено из поиска, карты, шкалы — показать вкладку воспроизведения."""
+        if getattr(self, "_syncing_tab", False) or "module_tabs" not in self.__dict__:
+            return
+        wanted = "playback" if self.bar_mode == "playback" else "main_view"
+        if self.module_tabs.active != wanted:
+            self._show_module(wanted)
+
+    def _apply_side_panels(self):
+        if "left_revealer" in self.__dict__:
+            self._apply_adaptive(self._last_width or self.get_width() or 1600)
+
+    def _render_module_tabs(self):
+        W.clear(self.module_tab_box)
+        home = W.button("⌂", lambda: self._show_module(shell.HOME), flat=True, tooltip="Главная: выбор раздела")
+        home.add_css_class("module-tab")
+        if self.module_tabs.active == shell.HOME:
+            home.add_css_class("active")
+        self.module_tab_box.append(home)
+        for key in self.module_tabs.tabs:
+            item = shell.module(key)
+            tab = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+            tab.add_css_class("view-tab")
+            tab.add_css_class("module-tab")
+            if key == self.module_tabs.active:
+                tab.add_css_class("active")
+            tab.append(W.button(f"{item.icon} {item.title}", lambda k=key: self._show_module(k), flat=True))
+            tab.append(W.button("✕", lambda k=key: self.close_module_tab(k), "tab-close", "Закрыть раздел",
+                                flat=True))
+            self.module_tab_box.append(tab)
+
+    def close_module_tab(self, key):
+        if key not in self.module_tabs.tabs:
+            return
+        active = self.module_tabs.close(key)
+        # Закрыли вкладку — закрываются и её окна с видео.
+        if key == "main_view":
+            self._stop_grid("live")
+        elif key == "playback":
+            self._stop_grid("playback")
+        self._render_module_tabs()
+        self._activate_module_page(active)
+
+    def _render_home(self):
+        W.clear(self.home_box)
+        W.margins(self.home_box, 24)
+        self.home_box.append(W.label("Панель управления", "home-title"))
+        self.home_box.append(W.label("Выберите раздел — он откроется отдельной вкладкой.", "muted"))
+        for section, items in shell.sections():
+            allowed = [m for m in items if dash.module_allowed(self.session, m.key)]
+            if not allowed:
+                continue
+            self.home_box.append(self._home_section_header(section))
+            flow = Gtk.FlowBox()
+            flow.set_selection_mode(Gtk.SelectionMode.NONE)
+            flow.set_homogeneous(False)
+            flow.set_max_children_per_line(8)
+            flow.set_min_children_per_line(1)
+            flow.set_column_spacing(10)
+            flow.set_row_spacing(10)
+            for item in allowed:
+                tile = Gtk.Button()
+                tile.add_css_class("home-tile")
+                tile.set_halign(Gtk.Align.START)
+                tile.set_overflow(Gtk.Overflow.HIDDEN)     # картинка скругляется вместе с плиткой
+                body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+                art = Gtk.Box()
+                art.add_css_class("home-art")
+                art.set_overflow(Gtk.Overflow.HIDDEN)
+                art.append(self._module_picture(item))
+                body.append(art)
+                caption = W.label(item.title, "home-tile-title", xalign=0.5, wrap=True)
+                caption.set_max_width_chars(22)
+                caption.set_width_chars(22)
+                caption.set_vexpand(True)
+                caption.set_valign(Gtk.Align.CENTER)
+                body.append(caption)
+                tile.set_child(body)
+                tile.set_tooltip_text(item.title if item.page else item.title + " (окно «Система»)")
+                tile.connect("clicked", lambda _b, k=item.key: self._show_module(k))
+                flow.append(tile)
+            self.home_box.append(flow)
+        tools = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        if self.session.can("live"):
+            tools.append(W.button("Окно просмотра на другом экране…", self.open_view_window, flat=True))
+        tools.append(W.button("Раздел при запуске…", self.open_local_settings, flat=True))
+        self.home_box.append(tools)
+
+    @staticmethod
+    def _home_section_header(section):
+        """Заголовок группы на Главной: крупное название на цветной разделительной линии."""
+        index = list(module_art.ACCENTS).index(section) if section in module_art.ACCENTS else 0
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        row.add_css_class("home-section")
+        row.add_css_class(f"home-section-{index}")
+        row.set_margin_top(6)
+        lead = Gtk.Box()
+        lead.add_css_class("home-section-lead")
+        lead.set_valign(Gtk.Align.CENTER)
+        row.append(lead)
+        title = W.label(section, "home-section-title")
+        row.append(title)
+        line = Gtk.Box()
+        line.add_css_class("home-section-line")
+        line.set_hexpand(True)
+        line.set_valign(Gtk.Align.CENTER)
+        row.append(line)
+        return row
+
+    def _module_picture(self, item):
+        """Иллюстрация раздела для плитки (SVG → текстура); при ошибке — крупный значок."""
+        cache = self.__dict__.setdefault("_module_textures", {})
+        texture = cache.get(item.key)
+        if texture is None:
+            markup = module_art.svg(item.key, item.section)
+            try:
+                texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(markup.encode())) if markup else None
+            except (GLib.Error, TypeError, AttributeError):
+                texture = None
+            cache[item.key] = texture or False
+        if not texture:
+            return W.label(item.icon, "home-tile-icon", xalign=0.5)
+        picture = Gtk.Picture.new_for_paintable(_HalfSizePaintable(texture))
+        picture.set_can_shrink(True)
+        picture.set_size_request(240, 160)
+        return picture
 
     def _activate_tab(self, key):  # совместимость со старым API вкладок модулей
         self._show_module(key)
@@ -771,9 +1065,21 @@ class MainWindowMixin:
         self.right_panel.set_visible(self.capabilities().get("alarm", True))
         self._fill_resource_list()
 
+    def open_playback_tab(self, moment=None):
+        """Перейти во «Удалённое воспроизведение», не запуская воспроизведение самому
+        (его сразу запустит вызывающий: поиск записей, карта, событие)."""
+        self._quiet_playback_tab = True
+        try:
+            self._show_module("playback")
+        finally:
+            self._quiet_playback_tab = False
+        if moment is not None and self.bar_mode == "playback":
+            self.timeline.model.cursor = moment.astimezone()
+            self.timeline.model.center = self.timeline.model.cursor
+
     def _close_inner(self):
-        self.inner_window.set_visible(False)
-        self.stack.set_visible_child_name("overview")
+        """Перейти к видеосетке (раньше — закрыть окно модуля поверх неё)."""
+        self._show_module("playback" if self.bar_mode == "playback" else "main_view")
 
     def _place_camera_area_in_archive(self, _in_archive):
         """Воспроизведение теперь идёт прямо в видеосетке — переносить её не нужно."""
@@ -882,6 +1188,8 @@ class MainWindowMixin:
 
     def _mark_view_dirty(self):
         if getattr(self, "_applying_tab", True) or not hasattr(self, "view_tabs"):
+            return
+        if self.__dict__.get("grid_context", "live") != "live":   # виды — только у живого просмотра
             return
         tab = self.view_tabs.current()
         if tab and not tab.dirty:
@@ -1023,6 +1331,8 @@ class MainWindowMixin:
         W.popover_menu(widget, items, x, y)
 
     def load_custom_view(self, view):
+        if self.__dict__.get("grid_context", "live") != "live":
+            self._show_module("main_view")
         self._capture_current_tab()
         tab, _created = self.view_tabs.open_saved(view)
         self._apply_tab(tab)
@@ -1106,6 +1416,17 @@ class MainWindowMixin:
                     mark = W.label("○ снято" if len(disarmed) == len(channels) else "◐", "muted")
                     mark.set_tooltip_text(f"Снято с охраны каналов: {len(disarmed)} из {len(channels)}")
                     head.append(mark)
+                if first.get("category") != "access":
+                    # Как в iVMS: ▶ рядом с названием и двойной щелчок — открыть все каналы устройства.
+                    play = W.button("▶", lambda c=channels: self.start_channels(c), flat=True,
+                                    tooltip="Открыть все каналы устройства (или двойной щелчок по названию)")
+                    play.add_css_class("tree-play")
+                    head.append(play)
+                    double = Gtk.GestureClick()
+                    double.set_button(1)
+                    double.connect("pressed", lambda _g, n, _x, _y, c=channels:
+                                   n == 2 and self.start_channels(c))
+                    head.add_controller(double)
                 expander.set_label_widget(head)
                 expander.set_expanded(bool(query) or len(members) <= 2)
                 W.on_right_click(expander, lambda w, x, y, m=member, d=first: self._device_menu(m, d, w, x, y))
@@ -1502,30 +1823,26 @@ class MainWindowMixin:
     def set_bar_mode(self, mode):
         if mode == self.bar_mode:
             return
+        if mode == "playback" and not self.session.can("playback"):
+            self.notify("Нет прав на воспроизведение", error=True)
+            self._update_bar_controls()
+            return
         self.bar_mode = mode
         self.sync_playback.set_visible(mode == "playback")
         self._update_bar_controls()
+        model = self.timeline.model
         if mode == "live":
-            for slot, state in list(self.streams.items()):
-                if state.get("playback"):
-                    device, credentials = state["base_device"], state["credentials"]
-                    try:
-                        self._start_preview(slot, device, credentials)
-                    except Exception as exc:
-                        self.notify(str(exc), error=True)
-            self.timeline.model.cursor = datetime.now().astimezone()
-            self.timeline.model.center = self.timeline.model.cursor
+            model.cursor = datetime.now().astimezone()
         else:
-            if not self.session.can("playback"):
-                self.notify("Нет прав на воспроизведение", error=True)
-                self.live_mode_button.set_active(True)
-                return
-            moment = datetime.now().astimezone() - timedelta(minutes=5)
-            self.timeline.model.cursor = moment
-            if self._playback_targets():
-                self.timeline_seek(moment)
+            state = self.streams.get(self.selected_slot)
+            if state and state.get("playback") and state.get("archive_start"):
+                model.cursor = self._slot_position(state)
+            elif model.cursor > datetime.now().astimezone() - timedelta(minutes=1):
+                model.cursor = datetime.now().astimezone() - timedelta(minutes=5)
+        model.center = model.cursor
         self._load_timeline_segments()
         self.timeline.queue_draw()
+        self._sync_tab_with_mode()
 
     def _update_bar_controls(self):
         playback = self.bar_mode == "playback"
@@ -1564,12 +1881,18 @@ class MainWindowMixin:
             self.playback_mode_button.set_active(True)
         self.timeline_seek(moment)
 
+    def _planned_cameras(self):
+        """{окно: id камеры} — что должно стоять в окнах текущей сетки."""
+        if self.__dict__.get("grid_context", "live") == "playback":
+            return dict(self.playback_planned)
+        tab = self.view_tabs.current() if hasattr(self, "view_tabs") else None
+        return {m["slot"]: m["device_id"] for m in (tab.mapping if tab else []) if m["kind"] == views.KIND_CAMERA}
+
     def _playback_targets(self):
         """[(slot, device, credentials)] для воспроизведения: выбранное окно или все при синхронном режиме."""
         slots = range(self.layout_count) if self.sync_playback.get_active() else [self.selected_slot]
         targets = []
-        tab = self.view_tabs.current() if hasattr(self, "view_tabs") else None
-        planned = {m["slot"]: m["device_id"] for m in (tab.mapping if tab else []) if m["kind"] == views.KIND_CAMERA}
+        planned = self._planned_cameras()
         for slot in slots:
             state = self.streams.get(slot)
             device = state["base_device"] if state else next(
@@ -1582,12 +1905,25 @@ class MainWindowMixin:
         return targets
 
     def timeline_seek(self, moment):
-        if self.bar_mode != "playback":
-            self.bar_mode = "playback"
-            self.sync_playback.set_visible(True)
-            self.playback_mode_button.set_active(True)
-            self._update_bar_controls()
-        targets = self._playback_targets()
+        carried = None
+        if self.__dict__.get("grid_context", "live") != "playback":
+            # Воспроизведение начато из живого просмотра (событие, карта, дата):
+            # те же камеры открываются в тех же окнах сетки воспроизведения.
+            carried = self._playback_targets()
+            self.open_playback_tab()
+            if self.bar_mode != "playback":
+                return
+            if carried:
+                need = max(slot for slot, _d, _c in carried) + 1
+                if need > self.layout_count:
+                    count = next((c for c in (1, 4, 9, 16, 25, 36, 49, 64) if c >= need), 64)
+                    self._set_layout(None, count)
+                carried = [t for t in carried if t[0] < self.layout_count]
+                for slot, device, _c in carried:
+                    self.playback_planned[slot] = device["id"]
+                if carried:
+                    self._select_slot(carried[0][0])
+        targets = carried if carried else self._playback_targets()
         if not targets:
             self.notify("Выберите окно с камерой для воспроизведения")
             return
@@ -1713,7 +2049,10 @@ class MainWindowMixin:
         self.bar_speed_label.set_text(f"{rate:g}x")
 
     def stop_playback_mode(self):
-        self.live_mode_button.set_active(True)
+        """■ на шкале: остановить воспроизведение во всех окнах (вкладка остаётся открытой)."""
+        for slot, state in list(self.streams.items()):
+            if state.get("playback"):
+                self._stop_stream(slot)
 
     def _timeline_tick(self):
         if getattr(self, "_closing", False):
@@ -1735,8 +2074,7 @@ class MainWindowMixin:
         state = self.streams.get(self.selected_slot)
         if state:
             return state["base_device"]
-        tab = self.view_tabs.current() if hasattr(self, "view_tabs") else None
-        planned = {m["slot"]: m["device_id"] for m in (tab.mapping if tab else []) if m["kind"] == views.KIND_CAMERA}
+        planned = self._planned_cameras()
         return next((d for d in self.devices if d["id"] == planned.get(self.selected_slot)), None)
 
     def _load_timeline_segments(self):

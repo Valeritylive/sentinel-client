@@ -46,6 +46,7 @@ except ImportError as exc:
 
 import sentinel_alarms as alarms
 import sentinel_archive as archive
+import sentinel_dashboard as dashboard
 import sentinel_devmgmt as devmgmt
 import sentinel_cloudstream as cloudstream
 import sentinel_hikconnect as hikconnect
@@ -204,7 +205,8 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
     def _update_status_bar(self):
         if not hasattr(self, "status_devices"):
             return
-        streams = len(self.streams) + sum(len(w.streams) for w in getattr(self, "monitor_windows", []))
+        own = len(self._all_grid_states()) if hasattr(self, "_all_grid_states") else len(self.streams)
+        streams = own + sum(len(w.streams) for w in getattr(self, "monitor_windows", []))
         try:
             import sentinel_alarms
             events = sentinel_alarms.unacknowledged_count()
@@ -1133,7 +1135,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         dialog.present()
 
     def open_local_settings(self):
-        dialog = Gtk.Dialog(title="Настройки локальных файлов", transient_for=self, modal=True)
+        dialog = Gtk.Dialog(title="Локальная конфигурация", transient_for=self, modal=True)
         dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
         dialog.add_button("Сохранить", Gtk.ResponseType.ACCEPT)
         form = Gtk.Grid(column_spacing=10, row_spacing=10, margin_top=16, margin_bottom=16,
@@ -1147,12 +1149,18 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
                   "камерам без Digest)")
         insecure_basic.set_active(self.allow_insecure_basic)
         form.attach(insecure_basic, 0, 2, 2, 1)
+        start_keys = [key for key, _title in dashboard.START_MODULES]
+        start_choice = Gtk.DropDown.new_from_strings([title for _key, title in dashboard.START_MODULES])
+        current_start = dashboard.start_module()
+        start_choice.set_selected(start_keys.index(current_start) if current_start in start_keys else 0)
+        self._field(form, "Раздел при запуске", start_choice, 3)
         dialog.get_content_area().append(form)
         def response(dlg, result):
             if result == Gtk.ResponseType.ACCEPT:
                 self.capture_folder = Path(captures.get_text()).expanduser()
                 self.record_folder = Path(recordings.get_text()).expanduser()
                 self._set_insecure_basic(insecure_basic.get_active())
+                dashboard.set_start_module(start_keys[start_choice.get_selected()])
                 with database() as db:
                     db.executemany("INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                                    (("capture_folder", str(self.capture_folder)), ("record_folder", str(self.record_folder)),
@@ -1627,10 +1635,11 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         self._stop_stream(source)
         if target_state:
             self._stop_stream(destination)
+        place = self._place_camera if getattr(self, "grid_context", "live") == "playback" else self._start_preview
         try:
             if target_camera:
-                self._start_preview(source, *target_camera)
-            self._start_preview(destination, *source_camera)
+                place(source, *target_camera)
+            place(destination, *source_camera)
         except Exception as exc:
             self.notify(f"Не удалось переместить камеру: {exc}")
 
@@ -2006,7 +2015,9 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
     def open_live_dialog(self, device, slot_index=None):
         def start_in_target_slot(camera, credentials):
             self.session_credentials[camera["id"]] = dict(credentials)
-            if slot_index is None:
+            if getattr(self, "grid_context", "live") == "playback":
+                self._place_camera(self.selected_slot if slot_index is None else slot_index, camera, credentials)
+            elif slot_index is None:
                 self.start_live(camera, credentials)
             else:
                 self._start_preview(slot_index, camera, credentials)
@@ -2109,9 +2120,20 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         if not self.devices:
             self.notify("Сначала добавьте камеры в раздел «Устройства»")
             return
-        targets = self.devices[:64]
-        if len(self.devices) > 64:
-            self.notify(f"Найдено {len(self.devices)} каналов; эта раскладка поддерживает до 64. "
+        self.start_channels(self.devices)
+
+    def start_channels(self, channels):
+        """Открывает в виде все переданные каналы, начиная с первого окна.
+
+        Во вкладке «Удалённое воспроизведение» каналы сразу переводятся в синхронное
+        воспроизведение с момента под курсором шкалы."""
+        channels = [c for c in channels if c.get("category") != "access"]
+        if not channels:
+            self.notify("У устройства нет видеоканалов")
+            return
+        targets = channels[:64]
+        if len(channels) > 64:
+            self.notify(f"Найдено {len(channels)} каналов; эта раскладка поддерживает до 64. "
                         "Будут запущены первые 64.")
         if len(targets) > self.layout_count:
             new_count = next((count for count in (1, 4, 9, 16, 25, 36, 49, 64)
@@ -2127,7 +2149,10 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         def start_camera(slot_index, device, credentials):
             self.session_credentials[device["id"]] = dict(credentials)
             try:
-                self._start_preview(slot_index, device, credentials)
+                if hasattr(self, "_place_camera"):
+                    self._place_camera(slot_index, device, credentials)
+                else:
+                    self._start_preview(slot_index, device, credentials)
                 self.streams[slot_index]["frame_interval"] = 0.25
                 progress["started"] += 1
             except Exception as exc:
@@ -2499,6 +2524,14 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
                 pass
         self.stop_talk()
         self.stop_all_streams()
+        for saved in getattr(self, "grid_contexts", {}).values():   # скрытая сетка просмотра/воспроизведения
+            for state in list((saved.get("streams") or {}).values()):
+                try:
+                    state["pipeline"].set_state(Gst.State.NULL)
+                    if state.get("cloud"):
+                        state["cloud"].stop()
+                except Exception:
+                    pass
         for window in list(self.monitor_windows):
             window.close()
         self.session_credentials.clear()
@@ -3117,7 +3150,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         direct_uri = None
         if seek_to is None and match.get("uri"):
             direct_uri = self._authenticate_device_uri(match["uri"], device, credentials)
-        self._close_inner()
+        self.open_playback_tab(start)
         if self.maximized_slot is not None:
             self._restore_maximized_slot()
         slot = min(self.selected_slot, self.layout_count - 1)
@@ -3622,7 +3655,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         return GLib.SOURCE_REMOVE
 
     def _update_stream_count(self):
-        count = len(self.streams)
+        count = len(self._all_grid_states()) if hasattr(self, "_all_grid_states") else len(self.streams)
         if hasattr(self, "monitor_windows"):
             count += sum(len(window.streams) for window in self.monitor_windows)
         if hasattr(self, "stream_count_label"):
