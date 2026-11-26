@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Помощник окна настроек Sentinel Server: действия, которым нужны права root.
+"""Помощник окна настроек Sentinel PRO Server: действия, которым нужны права root.
 
 Вызывается через ``pkexec /usr/lib/sentinel-server/sentinel-server-helper КОМАНДА``
 (polkit спрашивает пароль администратора компьютера). Данные — JSON на stdin, чтобы пароль

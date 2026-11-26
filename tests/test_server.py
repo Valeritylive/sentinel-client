@@ -151,7 +151,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(imported, {"added": 1, "errors": []})
         catalog = self.admin.devices()
         self.assertEqual({d["cloud_serial"] for d in catalog}, {"Q12345678"})
-        self.assertEqual({d["area"] for d in catalog}, {"Hik-Connect"})
+        self.assertEqual({d["area"] for d in catalog}, {"Облако P2P"})
         sync = self.admin.hikconnect_sync(accounts[0]["id"])
         self.assertEqual(sync["accounts"], {str(accounts[0]["id"]): 2})
         with self.assertRaises(remote.RemoteError) as ctx:

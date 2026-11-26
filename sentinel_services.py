@@ -146,7 +146,7 @@ class ServicesMixin:
 
     def _device_went_offline(self, device):
         if _cloud_online().get(device.get("cloud_serial")):
-            return False    # регистратор из Hik-Connect недоступен напрямую, но в облаке он в сети
+            return False    # регистратор из облака P2P недоступен напрямую, но в облаке он в сети
         self._set_device_status(device["host"], "offline")
         event = {"time": datetime.now().astimezone().isoformat(timespec="seconds"), "device_id": device["id"],
                  "device_name": device.get("host_name") or device["host"], "channel": "", "raw_type": "device_offline",
@@ -612,7 +612,7 @@ class ServicesMixin:
 
 
 def _cloud_online():
-    """{серийный номер: в сети ли устройство по данным Hik-Connect}; пусто, если облака нет."""
+    """{серийный номер: в сети ли устройство по данным облака P2P}; пусто, если облака нет."""
     try:
         import sentinel_hikconnect as hikconnect
         return hikconnect.cloud_status_map()
@@ -620,11 +620,11 @@ def _cloud_online():
         return {}
 
 
-CLOUD_STATUS_MAX_AGE = 300      # секунд: чаще состояние из Hik-Connect не запрашиваем
+CLOUD_STATUS_MAX_AGE = 300      # секунд: чаще состояние из облака P2P не запрашиваем
 
 
 def _refresh_cloud_status():
-    """Обновить «в сети» из Hik-Connect по сохранённым сессиям (фоновый поток; ошибки не мешают проверке)."""
+    """Обновить «в сети» из облака P2P по сохранённым сессиям (фоновый поток; ошибки не мешают проверке)."""
     try:
         import sentinel_hikconnect as hikconnect
         now = datetime.now().astimezone()

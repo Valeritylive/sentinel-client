@@ -5,10 +5,10 @@
   <vendor>Sentinel</vendor>
   <icon_name>io.sentinel.Server</icon_name>
   <action id="io.sentinel.server.configure">
-    <description>Configure Sentinel Server</description>
-    <description xml:lang="ru">Настройка Sentinel Server</description>
-    <message>Authentication is required to change Sentinel Server settings or passwords</message>
-    <message xml:lang="ru">Чтобы изменить настройки или пароль Sentinel Server, введите пароль администратора компьютера</message>
+    <description>Configure Sentinel PRO Server</description>
+    <description xml:lang="ru">Настройка Sentinel PRO Server</description>
+    <message>Authentication is required to change Sentinel PRO Server settings or passwords</message>
+    <message xml:lang="ru">Чтобы изменить настройки или пароль Sentinel PRO Server, введите пароль администратора компьютера</message>
     <defaults>
       <allow_any>auth_admin</allow_any>
       <allow_inactive>auth_admin</allow_inactive>

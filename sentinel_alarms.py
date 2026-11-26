@@ -415,7 +415,7 @@ def linkage_plan(rule, event):
 
 # ---------------------------------------------------------------- email
 DEFAULT_SMTP = {"server": "", "port": 587, "security": "starttls", "username": "", "sender": "",
-                "sender_name": "Sentinel"}
+                "sender_name": "Sentinel PRO"}
 
 
 def email_body(rule, event):

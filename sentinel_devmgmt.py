@@ -59,7 +59,7 @@ def export_csv(rows, handle):
     writer.writerow(CSV_HEADER)
     for r in rows:
         writer.writerow([_safe_cell(v) for v in (
-            r["name"], r["host"], "Hikvision" if r["protocol"] == "hikvision" else "RTSP",
+            r["name"], r["host"], "ISAPI" if r["protocol"] == "hikvision" else "RTSP",
             r["sdk_port"], r["http_port"], r["rtsp_port"], r["channels"],
             r.get("group_name", ""), r.get("device_model", ""), r.get("serial_no", ""))])
 

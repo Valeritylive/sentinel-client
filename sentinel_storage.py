@@ -122,7 +122,7 @@ def _migrate_ivms_model(db: sqlite3.Connection) -> None:
 
 
 def _migrate_hcl_model(db: sqlite3.Connection) -> None:
-    """Таблицы модулей в стиле HikCentral Lite: виды, персоны, ТС, доступ, тревоги, пользователи."""
+    """Таблицы модулей: виды, персоны, ТС, доступ, тревоги, пользователи."""
     db.execute("""CREATE TABLE IF NOT EXISTS view_groups (
         id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)""")
     # Виды на сервере: приватные (owner) и публичные; камеры — по адресу и каналу.
@@ -229,7 +229,7 @@ def _migrate_hcl_model(db: sqlite3.Connection) -> None:
 
 
 def _migrate_cloud_model(db: sqlite3.Connection) -> None:
-    """Облачные аккаунты (Hik-Connect) и снимок привязанных к ним устройств."""
+    """Облачные аккаунты (облако P2P) и снимок привязанных к ним устройств."""
     db.execute("""CREATE TABLE IF NOT EXISTS cloud_accounts (
         id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL DEFAULT 'hikconnect',
         account TEXT NOT NULL, api_url TEXT NOT NULL DEFAULT '', remember_password INTEGER NOT NULL DEFAULT 0,

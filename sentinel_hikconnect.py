@@ -1,6 +1,6 @@
-"""Вход через аккаунт Hik-Connect (P2P/облако Hikvision) и список привязанных устройств (без GTK).
+"""Вход через аккаунт облачного сервиса P2P и список привязанных устройств (без GTK).
 
-Hik-Connect не публикует открытого API. Модуль повторяет запросы мобильного
+Облачный сервис P2P не публикует открытого API. Модуль повторяет запросы мобильного
 приложения так же, как открытая интеграция Home Assistant «hikconnect»:
 
 * ``POST /v3/users/login/v2`` — вход (пароль передаётся как MD5-хеш, как в приложении);
@@ -38,7 +38,7 @@ SECRET_NAMESPACE = "hikconnect"
 DEFAULT_API = "https://api.hik-connect.com"
 REGIONS = (
     ("auto", "Международный (регион определяется автоматически)", DEFAULT_API),
-    ("ru", "Россия (hik-connectru.com)", "https://api.hik-connectru.com"),
+    ("ru", "Россия", "https://api.hik-connectru.com"),
     ("custom", "Другой адрес сервера…", ""),
 )
 DEVICE_FILTER = "TIME_PLAN,CONNECTION,SWITCH,STATUS,STATUS_EXT,WIFI,NODISTURB,P2P,KMS,HIDDNS"
@@ -50,7 +50,7 @@ ACCESS_HINTS = ("DS-K", "ACCESS", "INTERCOM", "VIS", "DOOR")
 
 
 class HikConnectError(RuntimeError):
-    """Ошибка облака Hik-Connect с понятным пользователю текстом."""
+    """Ошибка облака P2P с понятным пользователю текстом."""
 
     def __init__(self, message, code=None):
         super().__init__(message)
@@ -70,14 +70,14 @@ class SessionExpired(HikConnectError):
 
 
 _META_MESSAGES = {
-    1013: (WrongCredentials, "Неверный логин или пароль Hik-Connect"),
-    1014: (WrongCredentials, "Неверный логин или пароль Hik-Connect"),
-    1015: (CaptchaRequired, "Hik-Connect требует ввести код с картинки. Войдите один раз в приложение "
-                            "Hik-Connect или на сайте, затем повторите вход."),
-    1016: (WrongCredentials, "Аккаунт Hik-Connect заблокирован после неудачных попыток. Повторите позже."),
-    1021: (WrongCredentials, "Аккаунт Hik-Connect не найден в этом регионе. Выберите другой сервер."),
-    1060: (HikConnectError, "Hik-Connect требует подтвердить вход на новом устройстве (код из SMS/email). "
-                            "Подтвердите вход в приложении Hik-Connect и повторите."),
+    1013: (WrongCredentials, "Неверный логин или пароль облака P2P"),
+    1014: (WrongCredentials, "Неверный логин или пароль облака P2P"),
+    1015: (CaptchaRequired, "Облачный сервис требует ввести код с картинки. Войдите один раз в мобильное "
+                            "приложение или на сайте облачного сервиса, затем повторите вход."),
+    1016: (WrongCredentials, "Аккаунт облака P2P заблокирован после неудачных попыток. Повторите позже."),
+    1021: (WrongCredentials, "Аккаунт облака P2P не найден в этом регионе. Выберите другой сервер."),
+    1060: (HikConnectError, "Облачный сервис требует подтвердить вход на новом устройстве (код из SMS/email). "
+                            "Подтвердите вход в мобильном приложении облачного сервиса и повторите."),
     2003: (HikConnectError, "Устройство не в сети"),
     2009: (HikConnectError, "Устройство не в сети"),
     70002: (HikConnectError, "Устройство не в сети"),
@@ -108,7 +108,7 @@ def normalize_api_url(url: str) -> str:
         url = "https://" + url
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "https" or not parsed.hostname:
-        raise ValueError("Адрес сервера Hik-Connect должен начинаться с https://")
+        raise ValueError("Адрес сервера облака P2P должен начинаться с https://")
     return f"https://{parsed.netloc}"
 
 
@@ -142,7 +142,7 @@ def device_category(info) -> str:
 
 
 def normalize_device(info, connection=None, status=None, hiddns=None, wifi=None):
-    """Запись устройства Hik-Connect в собственном формате Sentinel."""
+    """Запись устройства облака P2P в собственном формате Sentinel."""
     connection, status, hiddns, wifi = connection or {}, status or {}, hiddns or {}, wifi or {}
     if "globalStatus" in status:
         online = _int(status.get("globalStatus")) == 1
@@ -182,7 +182,7 @@ def normalize_camera(info):
 
 
 class HikConnectClient:
-    """Синхронный клиент облака Hik-Connect (только stdlib)."""
+    """Синхронный клиент облака P2P (только stdlib)."""
 
     def __init__(self, api_url=DEFAULT_API, opener=None, timeout=15, feature_code=None):
         self.api_url = normalize_api_url(api_url)
@@ -239,18 +239,18 @@ class HikConnectClient:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
             if exc.code == 401:
-                raise SessionExpired("Сессия Hik-Connect истекла, войдите снова", 401) from exc
-            raise HikConnectError(f"Сервер Hik-Connect ответил HTTP {exc.code}", exc.code) from exc
+                raise SessionExpired("Сессия облака P2P истекла, войдите снова", 401) from exc
+            raise HikConnectError(f"Сервер облака P2P ответил HTTP {exc.code}", exc.code) from exc
         except urllib.error.URLError as exc:
-            raise HikConnectError(f"Нет связи с сервером Hik-Connect: {exc.reason}") from exc
+            raise HikConnectError(f"Нет связи с сервером облака P2P: {exc.reason}") from exc
         except TimeoutError as exc:
-            raise HikConnectError("Сервер Hik-Connect не ответил вовремя") from exc
+            raise HikConnectError("Сервер облака P2P не ответил вовремя") from exc
         try:
             body = json.loads(raw or b"{}")
         except json.JSONDecodeError as exc:
-            raise HikConnectError("Сервер Hik-Connect вернул не JSON — проверьте адрес сервера") from exc
+            raise HikConnectError("Сервер облака P2P вернул не JSON — проверьте адрес сервера") from exc
         if not isinstance(body, dict):
-            raise HikConnectError("Неожиданный ответ Hik-Connect")
+            raise HikConnectError("Неожиданный ответ облака P2P")
         if check:
             self._check(body)
         return body
@@ -265,19 +265,19 @@ class HikConnectClient:
         if code in (0, 200):
             return
         if code in (1001, 1002, 1003, 401):
-            raise SessionExpired("Сессия Hik-Connect истекла, войдите снова", code)
+            raise SessionExpired("Сессия облака P2P истекла, войдите снова", code)
         error_class, message = _META_MESSAGES.get(code, (HikConnectError, None))
         if message is None:
             meta = body.get("meta") or {}
             text = meta.get("message") or meta.get("moreInfo") or "неизвестная ошибка"
-            message = f"Hik-Connect: {text} (код {code})"
+            message = f"Облачный сервис: {text} (код {code})"
         raise error_class(message, code)
 
     # ------------------------------------------------------------ сессия
     def login(self, account: str, password: str) -> dict:
         account = (account or "").strip()
         if not account or not password:
-            raise WrongCredentials("Введите логин (email/телефон) и пароль Hik-Connect")
+            raise WrongCredentials("Введите логин (email/телефон) и пароль облака P2P")
         form = {"account": account, "password": password_hash(password), "featureCode": self.feature_code}
         for _attempt in range(MAX_REDIRECTS + 1):
             body = self._request("POST", "/v3/users/login/v2", form=form, auth=False, check=False)
@@ -292,11 +292,11 @@ class HikConnectClient:
             self.session_id = session.get("sessionId", "")
             self.refresh_id = session.get("rfSessionId", "")
             if not self.session_id:
-                raise HikConnectError("Hik-Connect не выдал сессию")
+                raise HikConnectError("Облачный сервис не выдал сессию")
             if domain:
                 self.api_url = normalize_api_url(domain)
             return body.get("loginUser") or {}
-        raise HikConnectError("Слишком много перенаправлений между регионами Hik-Connect")
+        raise HikConnectError("Слишком много перенаправлений между регионами облака P2P")
 
     def refresh(self) -> None:
         if not self.refresh_id:
@@ -308,12 +308,12 @@ class HikConnectClient:
         self.session_id = session.get("sessionId", "") or self.session_id
         self.refresh_id = session.get("refreshSessionId") or session.get("rfSessionId") or self.refresh_id
         if not self.session_id:
-            raise SessionExpired("Hik-Connect не продлил сессию")
+            raise SessionExpired("Облачный сервис не продлил сессию")
 
     def ensure_session(self, now=None) -> bool:
         """Продлить сессию, если она скоро истечёт. True — если продлевали."""
         if not self.session_id:
-            raise SessionExpired("Вход в Hik-Connect не выполнен")
+            raise SessionExpired("Вход в облако P2P не выполнен")
         if self.needs_refresh(now):
             self.refresh()
             return True
@@ -509,7 +509,7 @@ def restore_client(account_row, password=None, client_factory=None, force=False)
         if not secret_password:
             raise
     if not secret_password:
-        raise SessionExpired(f"Сессия Hik-Connect для {account_row['account']} истекла: введите пароль снова")
+        raise SessionExpired(f"Сессия облака P2P для {account_row['account']} истекла: введите пароль снова")
     client.login(account_row["account"], secret_password)
     return client
 
@@ -517,7 +517,7 @@ def restore_client(account_row, password=None, client_factory=None, force=False)
 def sync_account(account_id, password=None, client_factory=None):
     account = get_account(account_id)
     if not account:
-        raise HikConnectError("Аккаунт Hik-Connect не найден")
+        raise HikConnectError("Аккаунт облака P2P не найден")
     try:
         client = restore_client(account, password, client_factory)
     except HikConnectError as exc:
@@ -602,7 +602,7 @@ def mark_cloud_serial(device_ids, serial) -> None:
         db.executemany("UPDATE devices SET cloud_serial=? WHERE id=?", ((serial, i) for i in device_ids))
 
 
-def import_devices(serials, credentials, address="auto", area="Hik-Connect", store=None, account_id=None):
+def import_devices(serials, credentials, address="auto", area="Облако P2P", store=None, account_id=None):
     """Импорт облачных устройств в каталог. Возвращает (добавлено, [ошибки])."""
     store = store or store_device
     wanted = set(serials)
@@ -654,7 +654,7 @@ def save_validate_code(serial, code) -> None:
     storage.save_json_secret(CODE_NAMESPACE, serial, {"code": str(code).strip()})
 
 def account_for_serial(serial):
-    """Аккаунт Hik-Connect, к которому привязано устройство с этим серийным номером."""
+    """Аккаунт облака P2P, к которому привязано устройство с этим серийным номером."""
     with storage.database() as db:
         row = db.execute("""SELECT a.* FROM cloud_devices c JOIN cloud_accounts a ON a.id=c.account_id
             WHERE c.serial=? ORDER BY a.last_sync DESC LIMIT 1""", (serial,)).fetchone()
@@ -665,7 +665,7 @@ def cloud_session(serial, client_factory=None) -> dict:
     """Действующая сессия аккаунта устройства для облачного видео (продлевается при необходимости)."""
     account = account_for_serial(serial)
     if not account:
-        raise HikConnectError("Устройство не найдено в аккаунтах Hik-Connect: синхронизируйте аккаунт")
+        raise HikConnectError("Устройство не найдено в аккаунтах облака P2P: синхронизируйте аккаунт")
     before = (load_session(account["account"]) or {}).get("session_id")
     client = restore_client(account, client_factory=client_factory)
     if client.session_id != before:
@@ -690,13 +690,13 @@ def is_private_host(host) -> bool:
 
 
 def cloud_status_map() -> dict:
-    """{серийный номер: в сети ли устройство по данным Hik-Connect}."""
+    """{серийный номер: в сети ли устройство по данным облака P2P}."""
     with storage.database() as db:
         return {r["serial"]: bool(r["online"]) for r in db.execute("SELECT serial, online FROM cloud_devices")}
 
 
 def stream_failure_hint(device, message) -> str:
-    """Понятное объяснение ошибки потока для устройства, импортированного из Hik-Connect.
+    """Понятное объяснение ошибки потока для устройства, импортированного из облака P2P.
 
     Пустая строка — устройство не облачное или причина не распознана.
     """
@@ -707,13 +707,13 @@ def stream_failure_hint(device, message) -> str:
     host = device.get("host", "")
     if any(h in text for h in _AUTH_HINTS):
         return (f"{name}: регистратор отклонил логин или пароль. Нужны учётные данные самого регистратора "
-                "(обычно admin), а не пароль аккаунта Hik-Connect. Укажите их в «Система › Устройства».")
+                "(обычно admin), а не пароль аккаунта облака P2P. Укажите их в «Система › Устройства».")
     if any(h in text for h in _CONNECT_HINTS):
         if is_private_host(host):
             return (f"{name}: нет связи с {host}:{device.get('rtsp_port', 554)}. Это локальный адрес сети "
-                    "объекта из Hik-Connect, напрямую он доступен только через VPN или после проброса "
+                    "объекта из облака P2P, напрямую он доступен только через VPN или после проброса "
                     "RTSP-порта (укажите внешний адрес в «Система › Устройства»). Без этого видео "
-                    "идёт через облако Hik-Connect.")
+                    "идёт через облако P2P.")
         return (f"{name}: нет связи с {host}:{device.get('rtsp_port', 554)}. Проверьте, что RTSP-порт "
                 "проброшен на роутере объекта, или подключитесь к его сети через VPN.")
     return ""

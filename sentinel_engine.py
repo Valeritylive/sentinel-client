@@ -8,7 +8,7 @@
   тревожный выход с автозакрытием, PTZ-пресет, email;
 * резервная запись по расписанию (те же планы, что в клиенте);
 * проверка состояния устройств, синхронизация времени;
-* периодическая синхронизация аккаунтов Hik-Connect и перенос их состояния в каталог;
+* периодическая синхронизация аккаунтов облака P2P и перенос их состояния в каталог;
 * обслуживание хранилища (сроки хранения событий, тревог, журнала, записей).
 
 Все изменения публикуются в ``EventBus`` — оттуда их получают подключённые
@@ -272,7 +272,7 @@ class Engine:
                 break
             status, info = self.probe_status(device)
             if status == "offline" and cloud_online.get(device.get("cloud_serial")):
-                # Регистратор из Hik-Connect напрямую недоступен (чужая сеть), но в облаке он в сети:
+                # Регистратор из облака P2P напрямую недоступен (чужая сеть), но в облаке он в сети:
                 # не перезаписываем состояние, полученное из облака.
                 status = "online"
             self.set_status(key[0], key[1], status, info)
@@ -585,9 +585,9 @@ class Engine:
             recording.cleanup(recording.storage_root(), recording.enabled_plans(),
                               min_free_bytes=int(settings.get("min_free_gb", 5)) * 1024 ** 3)
 
-    # ------------------------------------------------------------ Hik-Connect
+    # ------------------------------------------------------------ облако P2P
     def sync_cloud_accounts(self, account_id=None, password=None):
-        """Обновить устройства аккаунтов Hik-Connect. Возвращает {account_id: число устройств | ошибка}."""
+        """Обновить устройства аккаунтов облака P2P. Возвращает {account_id: число устройств | ошибка}."""
         result = {}
         accounts = ([hikconnect.get_account(account_id)] if account_id is not None
                     else [a for a in hikconnect.load_accounts() if a["auto_sync"]])

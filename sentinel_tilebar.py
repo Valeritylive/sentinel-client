@@ -253,7 +253,7 @@ class TileBarMixin:
             return
         device = state["device"]
         if device.get("protocol", "hikvision") != "hikvision" or state.get("cloud") is not None:
-            self.notify("Визуальный PTZ доступен для камер Hikvision при прямом подключении")
+            self.notify("Визуальный PTZ доступен для ISAPI-камер при прямом подключении")
             return
         creds = state["credentials"]
         url = (f"http://{device['host']}:{device.get('http_port', 80)}"
@@ -316,7 +316,7 @@ class TileBarMixin:
         if not state:
             return
         if state.get("cloud") is not None or state["device"].get("protocol", "hikvision") != "hikvision":
-            self.notify("Двусторонняя связь доступна для Hikvision при прямом подключении")
+            self.notify("Двусторонняя связь доступна для ISAPI-устройств при прямом подключении")
             return
         for other in list(self._talk_sessions()):  # устройство держит один канал разговора
             self.stop_talk(other)

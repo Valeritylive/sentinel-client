@@ -607,7 +607,7 @@ def parse_door_status(payload):
 
 
 def door_counters(states):
-    """Счётчики для полосы над видом с дверями (как в HikCentral)."""
+    """Счётчики для полосы над видом с дверями."""
     counters = {"Открыта": 0, "Закрыта": 0, "Неизвестно": 0}
     for value in states.values():
         counters[value if value in counters else "Неизвестно"] += 1

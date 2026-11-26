@@ -122,5 +122,5 @@ jobs:
         run: |
           tag="$GITHUB_REF_NAME"
           case "$GITHUB_REF" in refs/tags/*) ;; *) tag="v$(cat VERSION)" ;; esac
-          mv Sentinel.flatpak "Sentinel-$(cat VERSION)-x86_64.flatpak"
-          gh release upload "$tag" "Sentinel-$(cat VERSION)-x86_64.flatpak" --clobber
+          mv Sentinel.flatpak "Sentinel-PRO-$(cat VERSION)-x86_64.flatpak"
+          gh release upload "$tag" "Sentinel-PRO-$(cat VERSION)-x86_64.flatpak" --clobber

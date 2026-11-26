@@ -93,7 +93,7 @@ if [ "$1" = configure ]; then
             systemctl try-restart sentinel-server.service >/dev/null 2>&1 || true
         fi
     fi
-    echo "sentinel-server: откройте «Sentinel Server» в меню приложений — появится значок в трее"
+    echo "sentinel-server: откройте «Sentinel PRO Server» в меню приложений — появится значок в трее"
     echo "и окно, где задаются логин и пароль администратора. Без графики:"
     echo "  sudo sentinel-server reset-password    # логин admin, пароль спросит"
 fi
@@ -117,10 +117,10 @@ Section: video
 Priority: optional
 Architecture: all
 Maintainer: Sentinel contributors
-Description: Sentinel video surveillance management server
- Headless service for Sentinel: shared device catalog, users and roles, ISAPI event
- subscriptions, alarm rules, PC backup recording and Hik-Connect account sync,
- exposed to Sentinel clients over a REST API with Server-Sent Events.
+Description: Sentinel PRO Server - security management server
+ Headless service for Sentinel PRO: shared device catalog, users and roles, ISAPI event
+ subscriptions, alarm rules, PC backup recording and P2P cloud account sync,
+ exposed to Sentinel PRO clients over a REST API with Server-Sent Events.
  Includes a GTK 4 settings window (administrator password, network, TLS) and
  a system tray status icon with start/stop/restart controls.
 Depends: python3 (>= 3.10), adduser

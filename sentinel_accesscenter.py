@@ -694,7 +694,7 @@ class AccessCenterMixin:
         folder = storage.DATA / "badges"
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / f"badge_{visitor['badge']}.html"
-        path.write_text(visitors.badge_html(visitor, storage.get_setting("site_name", "Sentinel")), encoding="utf-8")
+        path.write_text(visitors.badge_html(visitor, storage.get_setting("site_name", "Sentinel PRO")), encoding="utf-8")
         try:
             Gtk.show_uri(self, path.as_uri(), 0)
         except Exception:

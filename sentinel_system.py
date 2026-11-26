@@ -1,4 +1,4 @@
-"""Окно «Система» в стиле HikCentral Lite.
+"""Окно «Система».
 
 Вкладки: Управление устройствами · Персона · Транспорт · Уровень доступа ·
 Видеодомофон · Событие и тревога · Учётная запись и безопасность · Конфигурация системы.
@@ -193,7 +193,7 @@ class SystemWindow(Gtk.Window):
         table_box.append(_scroll(self.device_table))
         table_box.append(_toolbar(W.button("Добавить устройство", self.show_add_device, "red-button"),
                                   W.button("Пакетное обновление", lambda: self.owner.notify(
-                                      "Обновление прошивки выполняется в веб-интерфейсе устройства или Hik-Tools: "
+                                      "Обновление прошивки выполняется в веб-интерфейсе устройства или фирменной утилите производителя: "
                                       "откройте «Удалённая настройка» в меню устройства."))))
         self.device_body.add_named(table_box, "table")
         self.device_body.add_named(self.owner._group_page(), "areas")
@@ -294,10 +294,10 @@ class SystemWindow(Gtk.Window):
         self.add_method_cards = {}
         first = None
         for key, title, text in (
-                ("auto", "Автопоиск", "Устройство и клиент в одной локальной сети (поиск SADP)."),
+                ("auto", "Автопоиск", "Устройство и клиент в одной локальной сети (широковещательный поиск)."),
                 ("batch", "Пакетный импорт", "IP, порты и учётные данные нескольких устройств из CSV."),
                 ("manual", "Вручную", "Известен адрес одного устройства или диапазон IP."),
-                ("hikconnect", "Hik-Connect", "Устройства, привязанные к облачному аккаунту Hikvision (P2P).")):
+                ("hikconnect", "Облако P2P", "Устройства, привязанные к аккаунту облачного сервиса P2P.")):
             card = Gtk.ToggleButton()
             card.add_css_class("method-card")
             inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -402,7 +402,7 @@ class SystemWindow(Gtk.Window):
             self.owner.notify("Отметьте устройства в списке")
             return
         if any(not d["activated"] for d in selected):
-            self.owner.notify("Неактивированные устройства сначала активируйте (задайте пароль) в SADP или веб-"
+            self.owner.notify("Неактивированные устройства сначала активируйте (задайте пароль) в утилите производителя или веб-"
                               "интерфейсе", error=True)
             return
         credentials = {"username": self.scan_user.get_text().strip(), "password": self.scan_password.get_text()}
@@ -589,8 +589,8 @@ class SystemWindow(Gtk.Window):
             doors = _field(form, 8, "Количество дверей", Gtk.SpinButton.new_with_range(1, 64, 1))
             doors.set_value(int(device.get("door_count") or 1))
         if device.get("cloud_serial"):
-            note = ("Устройство добавлено из Hik-Connect. Логин и пароль здесь — от самого регистратора, "
-                    "а не от аккаунта Hik-Connect. Без них и без прямого доступа видео идёт через облако.")
+            note = ("Устройство добавлено из облака P2P. Логин и пароль здесь — от самого регистратора, "
+                    "а не от аккаунта облака P2P. Без них и без прямого доступа видео идёт через облако.")
             if hikconnect.is_private_host(row["host"]):
                 note += (f" Адрес {row['host']} — локальная сеть объекта: напрямую он доступен через VPN или "
                          "после проброса RTSP-порта и смены адреса на внешний.")
@@ -655,7 +655,7 @@ class SystemWindow(Gtk.Window):
 
         advanced = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         W.margins(advanced, 12)
-        advanced.append(W.label(f"Протокол: {'Hikvision ISAPI/RTSP' if device['protocol'] == 'hikvision' else 'RTSP'}",
+        advanced.append(W.label(f"Протокол: {'ISAPI/RTSP' if device['protocol'] == 'hikvision' else 'RTSP'}",
                                 "muted"))
         advanced.append(W.label(f"SDK-порт: {row['sdk_port']}   ·   Каналов: {row['channels']}", "muted"))
         advanced.append(W.label(f"Последняя проверка: {(device.get('status_checked_at') or '—')[:19]}", "muted"))
@@ -1263,7 +1263,7 @@ class SystemWindow(Gtk.Window):
         notebook.set_vexpand(True)
         subscription = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         W.margins(subscription, 12)
-        self.receive_events = Gtk.CheckButton(label="Получать события со всех устройств Hikvision (поток ISAPI)")
+        self.receive_events = Gtk.CheckButton(label="Получать события со всех ISAPI-устройств")
         self.receive_events.set_active(storage.get_setting("receive_events", "1") == "1")
         self.receive_events.connect("toggled", lambda b: (storage.set_setting("receive_events",
                                                                               "1" if b.get_active() else "0"),
@@ -1737,7 +1737,7 @@ class SystemWindow(Gtk.Window):
         def collect():
             return {"server": server.get_text().strip(), "port": port.get_value_as_int(),
                     "security": ["starttls", "ssl", "none"][mode.get_selected()], "username": user.get_text().strip(),
-                    "sender": sender.get_text().strip(), "sender_name": name.get_text().strip() or "Sentinel"}
+                    "sender": sender.get_text().strip(), "sender_name": name.get_text().strip() or "Sentinel PRO"}
 
         def save():
             data = collect()
@@ -1757,7 +1757,7 @@ class SystemWindow(Gtk.Window):
 
             def worker():
                 try:
-                    alarms.send_email(data, secret, test_to.get_text(), "Sentinel: тест", "Тестовое письмо Sentinel.")
+                    alarms.send_email(data, secret, test_to.get_text(), "Sentinel PRO: тест", "Тестовое письмо Sentinel PRO.")
                     GLib.idle_add(self.owner.notify, "Тестовое письмо отправлено")
                 except Exception as exc:
                     GLib.idle_add(self.owner.notify, f"Ошибка отправки: {exc}", True)
@@ -1879,7 +1879,7 @@ class SystemWindow(Gtk.Window):
         insecure.set_active(self.owner.allow_insecure_basic)
         insecure.connect("toggled", lambda b: self.owner._set_insecure_basic(b.get_active()))
         box.append(insecure)
-        box.append(W.label("Удалённый доступ к клиенту и мобильное приложение Hik-Connect не поддерживаются: Sentinel "
+        box.append(W.label("Удалённый доступ к клиенту и мобильные приложения облачных сервисов не поддерживаются: Sentinel PRO "
                            "работает локально и подключается к устройствам напрямую.", "muted", wrap=True))
         return box
 

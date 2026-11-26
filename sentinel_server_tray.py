@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Значок Sentinel Server в трее: состояние сервера и меню управления.
+"""Значок Sentinel PRO Server в трее: состояние сервера и меню управления.
 
 GTK 4 не умеет значки в трее, поэтому значок — отдельный процесс без GTK: он сам публикует
 StatusNotifierItem и меню com.canonical.dbusmenu по D-Bus (Gio). Это тот же протокол, что у
@@ -187,7 +187,7 @@ def settings_command(*args):
 
 def notify(title, body="", urgency="normal"):
     if shutil.which("notify-send"):
-        subprocess.Popen(["notify-send", "-a", "Sentinel Server", "-u", urgency, "-i", "io.sentinel.Server",
+        subprocess.Popen(["notify-send", "-a", "Sentinel PRO Server", "-u", urgency, "-i", "io.sentinel.Server",
                           title, body], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -224,20 +224,20 @@ class Tray:
 
     def tooltip(self):
         if not self.status:
-            return "Sentinel Server", "Проверяю состояние…"
+            return "Sentinel PRO Server", "Проверяю состояние…"
         lines = [self.status.text]
         if self.status.detail:
             lines.append(self.status.detail.splitlines()[0])
         if self.status.active and self.status.urls:
             lines.append(self.status.urls[0])
-        return "Sentinel Server", "\n".join(lines)
+        return "Sentinel PRO Server", "\n".join(lines)
 
     def _sni_get(self, _conn, _sender, _path, _iface, name):
         title, description = self.tooltip()
         values = {
             "Category": GLib.Variant("s", "SystemServices"),
             "Id": GLib.Variant("s", "sentinel-server"),
-            "Title": GLib.Variant("s", "Sentinel Server"),
+            "Title": GLib.Variant("s", "Sentinel PRO Server"),
             "Status": GLib.Variant("s", "NeedsAttention" if self.status and self.status.state == "error"
                                    else "Active"),
             "WindowId": GLib.Variant("i", 0),
@@ -346,12 +346,12 @@ class Tray:
             self._menu_changed()
             if old is not None and old.state != status.state:
                 if status.state == "error":
-                    notify("Sentinel Server: ошибка", f"{status.text}\n{status.detail}", "critical")
+                    notify("Sentinel PRO Server: ошибка", f"{status.text}\n{status.detail}", "critical")
                 elif old.state == "error" and status.state == "running":
-                    notify("Sentinel Server снова работает")
+                    notify("Sentinel PRO Server снова работает")
         if status.setup_required and not self.setup_opened:
             self.setup_opened = True
-            notify("Sentinel Server: первый запуск", "Задайте логин и пароль администратора")
+            notify("Sentinel PRO Server: первый запуск", "Задайте логин и пароль администратора")
             self.open_settings("--setup")
 
     # ------------------------------------------------------------ действия
@@ -399,7 +399,7 @@ class Tray:
     def _action_done(self, error, quit_after):
         self.busy = ""
         if error:
-            notify("Sentinel Server", str(error), "critical")
+            notify("Sentinel PRO Server", str(error), "critical")
         elif quit_after:
             self.loop.quit()
             return

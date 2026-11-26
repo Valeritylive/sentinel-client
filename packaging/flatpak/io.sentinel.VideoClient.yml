@@ -2,7 +2,7 @@
 # Платформа GNOME уже содержит GTK 4, GStreamer (с gst-libav), PyGObject, pycairo и WebKitGTK 6.
 # Внутрь пакета дополнительно собираются secret-tool (хранение паролей устройств)
 # и минимальный FFmpeg (запись, экспорт, резервная запись на ПК и облачное видео без перекодирования),
-# а также библиотеки облачного видео Hik-Connect (hikcloudstream, pyezvizapi).
+# а также библиотеки облачного видео P2P (hikcloudstream, pyezvizapi).
 #
 # Локальная сборка:
 #   flatpak install flathub org.gnome.Platform//47 org.gnome.Sdk//47
@@ -65,7 +65,7 @@ modules:
         url: https://github.com/FFmpeg/FFmpeg.git
         tag: n7.1
 
-  # Библиотеки облачного видео Hik-Connect (Python 3.12 платформы GNOME 47 подходит).
+  # Библиотеки облачного видео P2P (Python 3.12 платформы GNOME 47 подходит).
   # Версии должны совпадать с RUNTIME_PACKAGES в sentinel_cloudstream.py (проверяется тестом).
   - name: cloud-libs
     buildsystem: simple

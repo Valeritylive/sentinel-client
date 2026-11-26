@@ -14,7 +14,7 @@ AppDir:
   path: ./AppDir
   app_info:
     id: io.sentinel.VideoClient
-    name: Sentinel Video Client
+    name: Sentinel PRO
     icon: io.sentinel.VideoClient
     version: "{{APP_VERSION}}"
     exec: usr/bin/python3
@@ -53,4 +53,4 @@ AppDir:
 
 AppImage:
   arch: x86_64
-  file_name: 'Sentinel-{{APP_VERSION}}-x86_64.AppImage'
+  file_name: 'Sentinel-PRO-{{APP_VERSION}}-x86_64.AppImage'

@@ -1,4 +1,4 @@
-"""Имитация облака Hik-Connect для тестов: opener, совместимый с urllib."""
+"""Имитация облачного сервиса P2P для тестов: opener, совместимый с urllib."""
 import base64
 import io
 import json
