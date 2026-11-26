@@ -248,6 +248,26 @@ def _migrate_cloud_model(db: sqlite3.Connection) -> None:
         category TEXT NOT NULL DEFAULT 'video', cameras TEXT NOT NULL DEFAULT '[]',
         synced_at TEXT NOT NULL DEFAULT '', PRIMARY KEY(account_id, serial))""")
     _add_column(db, "devices", "cloud_serial", "TEXT NOT NULL DEFAULT ''")
+    _rename_brand_groups(db)
+
+
+# Старые версии называли группу импортированных из облака устройств именем сервиса производителя.
+_LEGACY_CLOUD_GROUPS = ("Hik-Connect", "HikConnect", "Hik Connect")
+CLOUD_GROUP_NAME = "Облако P2P"
+
+
+def _rename_brand_groups(db: sqlite3.Connection) -> None:
+    """Группа «Hik-Connect» из прежних версий → «Облако P2P» (в интерфейсе нет марок производителей)."""
+    for legacy in _LEGACY_CLOUD_GROUPS:
+        row = db.execute("SELECT id FROM groups WHERE name=?", (legacy,)).fetchone()
+        if not row:
+            continue
+        target = db.execute("SELECT id FROM groups WHERE name=?", (CLOUD_GROUP_NAME,)).fetchone()
+        if target:
+            db.execute("UPDATE devices SET group_id=? WHERE group_id=?", (target[0], row[0]))
+            db.execute("DELETE FROM groups WHERE id=?", (row[0],))
+        else:
+            db.execute("UPDATE groups SET name=? WHERE id=?", (CLOUD_GROUP_NAME, row[0]))
 
 
 def get_setting(key: str, default: str | None = None) -> str | None:

@@ -3357,7 +3357,9 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
             # Облако отдаёт первый кадр через 5–15 секунд: показываем, что идёт подключение.
             placeholder.set_text(f"{slot_index + 1}\n\nПодключение через облако P2P…")
             placeholder.set_visible(True)
-            GLib.timeout_add_seconds(40, self._cloud_first_frame_timeout, state)
+            state["cloud_phase"] = cloud.phase
+            state["cloud_phase_since"] = time.monotonic()
+            GLib.timeout_add_seconds(2, self._cloud_first_frame_timeout, state)
         else:
             placeholder.set_visible(False)
         self._select_slot(slot_index)
@@ -3463,10 +3465,81 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         else:
             GLib.idle_add(self._stop_stream_if_current, state)
 
+    CLOUD_FIRST_FRAME_SECONDS = 45
+
     def _cloud_first_frame_timeout(self, state):
-        if self.streams.get(state["slot"]) is state and not state["last_frame_time"]:
-            self._stream_failed(state["slot"], "нет кадров 40 секунд", state)
-        return GLib.SOURCE_REMOVE
+        """Следит за подключением через облако: очередь не считается, на договор и первый кадр — 45 с."""
+        slot = state["slot"]
+        if self.streams.get(slot) is not state or state["last_frame_time"]:
+            return GLib.SOURCE_REMOVE
+        cloud = state.get("cloud")
+        phase = cloud.phase if cloud is not None else "connecting"
+        now = time.monotonic()
+        if phase != state.get("cloud_phase"):
+            state["cloud_phase"], state["cloud_phase_since"] = phase, now
+            if slot < len(self.video_slots):
+                text = ("Ожидание очереди облака P2P…" if phase == "queued"
+                        else "Подключение через облако P2P…")
+                self.video_slots[slot]["placeholder"].set_text(f"{slot + 1}\n\n{text}")
+        if phase == "queued":
+            return GLib.SOURCE_CONTINUE
+        if now - state.get("cloud_phase_since", now) >= self.CLOUD_FIRST_FRAME_SECONDS:
+            self._stream_failed(slot, f"нет кадров {self.CLOUD_FIRST_FRAME_SECONDS} секунд", state)
+            return GLib.SOURCE_REMOVE
+        return GLib.SOURCE_CONTINUE
+
+    CLOUD_RETRY_DELAYS = (5, 15, 30)
+
+    @property
+    def _cloud_attempts(self):
+        attempts = getattr(self, "_cloud_attempts_map", None)
+        if attempts is None:
+            attempts = self._cloud_attempts_map = {}
+        return attempts
+
+    def _schedule_cloud_retry(self, slot, device, state):
+        """Временная ошибка облака: окно само подключится снова (5, 15, 30 с). False — попытки кончились."""
+        key = (slot, device.get("id"))
+        attempt = self._cloud_attempts.get(key, 0)
+        if state.get("last_frame_time"):
+            attempt = 0                     # видео уже шло: обрыв, а не отказ — начинаем счёт заново
+        if attempt >= len(self.CLOUD_RETRY_DELAYS):
+            return False
+        self._cloud_attempts[key] = attempt + 1
+        delay = self.CLOUD_RETRY_DELAYS[attempt]
+        credentials = dict(state.get("credentials") or {})
+        stream = (state.get("device") or {}).get("stream")
+        if slot < len(self.video_slots):
+            self.video_slots[slot]["placeholder"].set_text(
+                f"{slot + 1}\n\n{device.get('name', '')}\nПовторное подключение через {delay} с…")
+
+        epoch = getattr(self, "_cloud_retry_epoch", 0)
+
+        def retry():
+            if epoch != getattr(self, "_cloud_retry_epoch", 0):
+                return GLib.SOURCE_REMOVE   # вид сменили или окна закрыли
+            if slot in self.streams or slot >= getattr(self, "layout_count", 0):
+                return GLib.SOURCE_REMOVE   # окно уже занято другим потоком
+            if self.video_slots[slot].get("device") is not None:
+                return GLib.SOURCE_REMOVE
+            try:
+                self._start_preview(slot, device, credentials, stream_override=stream)
+            except Exception as exc:
+                self.video_slots[slot]["placeholder"].set_text(f"{slot + 1}\n\n{exc}")
+            return GLib.SOURCE_REMOVE
+
+        GLib.timeout_add_seconds(delay, retry)
+        return True
+
+    def _notify_cloud_failure(self, code, text):
+        """Одно уведомление на причину за 15 секунд, а не по одному на каждое окно."""
+        now = time.monotonic()
+        recent = getattr(self, "_cloud_notified", {})
+        self._cloud_notified = recent
+        if now - recent.get(code, -1e9) < 15:
+            return
+        recent[code] = now
+        self.notify(text, error=True)
 
     def _stop_stream_if_current(self, state):
         if self.streams.get(state["slot"]) is state:
@@ -3488,11 +3561,17 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
                     and not getattr(self, "silent_stream_errors", False)):
                 self._ask_validate_code(slot, device, state, error)
                 return GLib.SOURCE_REMOVE
-            if getattr(self, "silent_stream_errors", False):
-                if slot < len(self.video_slots):
-                    self.video_slots[slot]["placeholder"].set_text(f"{slot + 1}\n\nПоток недоступен")
-            else:
-                self.notify(text, error=True)
+            retryable = error.retryable if error is not None else True
+            if device and retryable and self._schedule_cloud_retry(slot, device, state):
+                return GLib.SOURCE_REMOVE
+            self._cloud_attempts.pop((slot, device.get("id") if device else None), None)
+            if slot < len(self.video_slots):
+                # Причина остаётся в окне: при 30 камерах уведомления перекрывают друг друга.
+                reason = error.title if error is not None else message
+                name = (device or {}).get("name", "")
+                self.video_slots[slot]["placeholder"].set_text(f"{slot + 1}\n\n{name}\n{reason}")
+            if not getattr(self, "silent_stream_errors", False):
+                self._notify_cloud_failure(error.code if error is not None else "failed", text)
             return GLib.SOURCE_REMOVE
         hint = hikconnect.stream_failure_hint(device, message)
         if (hint and device and not state.get("playback") and hikconnect.is_private_host(device.get("host"))
@@ -3546,6 +3625,8 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         return GLib.SOURCE_REMOVE
 
     def stop_all_streams(self):
+        self._cloud_retry_epoch = getattr(self, "_cloud_retry_epoch", 0) + 1   # отменить ожидающие повторы
+        self._cloud_attempts.clear()
         if getattr(self, "auto_switch_source", 0):
             GLib.source_remove(self.auto_switch_source)
             self.auto_switch_source = 0
