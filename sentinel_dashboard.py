@@ -89,12 +89,32 @@ def save_widgets(session, keys):
     storage.set_json_setting(_setting_key(session.username), [k for k in keys if k in allowed])
 
 
+# Раздел, который открывается при запуске клиента.
+START_MODULES = (("home", "Главная (выбор раздела)"), ("main_view", "Главный просмотр"),
+                 ("playback", "Удалённое воспроизведение"), ("board", "Панель мониторинга"))
+
+
+def start_module():
+    value = storage.get_setting("start_module", "")
+    if value in dict(START_MODULES):
+        return value
+    # старый флажок «Открывать панель мониторинга при запуске»
+    return "board" if storage.get_setting("start_on_dashboard", "0") == "1" else "home"
+
+
+def set_start_module(key):
+    storage.set_setting("start_module", key if key in dict(START_MODULES) else "home")
+
+
 def start_on_dashboard():
-    return storage.get_setting("start_on_dashboard", "0") == "1"
+    return start_module() == "board"
 
 
 def set_start_on_dashboard(value):
-    storage.set_setting("start_on_dashboard", "1" if value else "0")
+    if value:
+        set_start_module("board")
+    elif start_module() == "board":
+        set_start_module("home")
 
 
 # ---------------------------------------------------------------- состояние системы

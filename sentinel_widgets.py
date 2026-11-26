@@ -32,6 +32,14 @@ headerbar button:hover { background: #2a2b2f; }
 .view-tab.active { background: #2e2f34; box-shadow: inset 0 2px #e8232c; }
 .view-tab button { padding: 2px 8px; }
 .view-tab .tab-close { padding: 0 4px; min-width: 16px; opacity: 0.6; }
+.module-tab.active { background: #2e2f34; box-shadow: inset 0 2px #e8232c; }
+button.module-tab { border-radius: 6px 6px 0 0; margin-top: 5px; padding: 2px 10px; }
+.view-strip { background: #1d1e22; padding: 0 4px; }
+.view-strip .view-tab { margin-top: 3px; }
+.home-title { font-size: 20px; font-weight: 700; }
+.home-tile { background: #26272c; border: 1px solid #34353b; border-radius: 8px; padding: 18px 10px; min-width: 150px; min-height: 96px; }
+.home-tile:hover { background: #2e2f35; border-color: #e8232c; }
+.home-tile-icon { font-size: 28px; color: #e8232c; }
 .side-panel { background: #202124; border-right: 1px solid #111; }
 .side-panel.right { border-right: none; border-left: 1px solid #111; }
 .panel-handle { background: #26272b; border: none; min-width: 10px; padding: 0; color: #8b8d93; border-radius: 0; }

@@ -46,6 +46,7 @@ except ImportError as exc:
 
 import sentinel_alarms as alarms
 import sentinel_archive as archive
+import sentinel_dashboard as dashboard
 import sentinel_devmgmt as devmgmt
 import sentinel_cloudstream as cloudstream
 import sentinel_hikconnect as hikconnect
@@ -1133,7 +1134,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         dialog.present()
 
     def open_local_settings(self):
-        dialog = Gtk.Dialog(title="Настройки локальных файлов", transient_for=self, modal=True)
+        dialog = Gtk.Dialog(title="Локальная конфигурация", transient_for=self, modal=True)
         dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
         dialog.add_button("Сохранить", Gtk.ResponseType.ACCEPT)
         form = Gtk.Grid(column_spacing=10, row_spacing=10, margin_top=16, margin_bottom=16,
@@ -1147,12 +1148,18 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
                   "камерам без Digest)")
         insecure_basic.set_active(self.allow_insecure_basic)
         form.attach(insecure_basic, 0, 2, 2, 1)
+        start_keys = [key for key, _title in dashboard.START_MODULES]
+        start_choice = Gtk.DropDown.new_from_strings([title for _key, title in dashboard.START_MODULES])
+        current_start = dashboard.start_module()
+        start_choice.set_selected(start_keys.index(current_start) if current_start in start_keys else 0)
+        self._field(form, "Раздел при запуске", start_choice, 3)
         dialog.get_content_area().append(form)
         def response(dlg, result):
             if result == Gtk.ResponseType.ACCEPT:
                 self.capture_folder = Path(captures.get_text()).expanduser()
                 self.record_folder = Path(recordings.get_text()).expanduser()
                 self._set_insecure_basic(insecure_basic.get_active())
+                dashboard.set_start_module(start_keys[start_choice.get_selected()])
                 with database() as db:
                     db.executemany("INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                                    (("capture_folder", str(self.capture_folder)), ("record_folder", str(self.record_folder)),
@@ -2112,7 +2119,10 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         self.start_channels(self.devices)
 
     def start_channels(self, channels):
-        """Открывает в виде все переданные каналы, начиная с первого окна."""
+        """Открывает в виде все переданные каналы, начиная с первого окна.
+
+        Во вкладке «Удалённое воспроизведение» каналы сразу переводятся в синхронное
+        воспроизведение с момента под курсором шкалы."""
         channels = [c for c in channels if c.get("category") != "access"]
         if not channels:
             self.notify("У устройства нет видеоканалов")
@@ -2144,6 +2154,9 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         def pump():
             if progress["index"] >= len(targets):
                 summary = f"Запущено каналов: {progress['started']} из {len(targets)}"
+                if getattr(self, "bar_mode", "live") == "playback" and progress["started"]:
+                    self.sync_playback.set_active(True)
+                    self.timeline_seek(self.timeline.model.cursor)
                 if progress["errors"]:
                     summary += f". Ошибок: {len(progress['errors'])}. {progress['errors'][0]}"
                 self.notify(summary)
@@ -3125,7 +3138,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         direct_uri = None
         if seek_to is None and match.get("uri"):
             direct_uri = self._authenticate_device_uri(match["uri"], device, credentials)
-        self._close_inner()
+        self.open_playback_tab(start)
         if self.maximized_slot is not None:
             self._restore_maximized_slot()
         slot = min(self.selected_slot, self.layout_count - 1)

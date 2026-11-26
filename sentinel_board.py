@@ -8,24 +8,9 @@ from gi.repository import GLib, Gtk
 import sentinel_alarms as alarms
 import sentinel_dashboard as dash
 import sentinel_recording as rec
+import sentinel_shell as shell
 import sentinel_storage as storage
 import sentinel_widgets as W
-
-MENU_MODULES = (
-    # заголовок, ключ модуля
-    ("Панель мониторинга", "board"),
-    ("Главный просмотр", "main_view"),
-    ("Статистика и сводка", "summary"),
-    ("Центр событий", "events"),
-    ("Поиск записей", "playback"),
-    ("Электронная карта", "emap"),
-    ("Контроль доступа", "access"),
-    ("Парковка", "parking"),
-    ("Видеостена", "wall"),
-    ("Патрулирование", "patrol"),
-    ("Доказательства", "evidence"),
-    ("Локальные файлы", "local_files"),
-)
 
 
 class BoardMixin:
@@ -65,8 +50,7 @@ class BoardMixin:
         return flow
 
     def _board_visible(self):
-        return (hasattr(self, "inner_window") and self.inner_window.get_visible()
-                and self.stack.get_visible_child_name() == "board")
+        return "module_tabs" in self.__dict__ and self._module_page_shown("board")
 
     def _board_tick(self):
         if getattr(self, "_closing", False):
@@ -322,9 +306,11 @@ class BoardMixin:
         popover.set_child(box)
         self.modules_menu_box = box
         session = self.session
-        for title, key in MENU_MODULES:
-            if dash.module_allowed(session, key):
-                box.append(W.button(title, lambda k=key: (popover.popdown(), self._show_module(k)), flat=True))
+        box.append(W.button("Главная", lambda: (popover.popdown(), self._show_module(shell.HOME)), flat=True))
+        for item in shell.MODULES:
+            if item.page and dash.module_allowed(session, item.key):
+                box.append(W.button(item.title,
+                                    lambda k=item.key: (popover.popdown(), self._show_module(k)), flat=True))
         tools = []
         if session.can("live"):
             tools.append(("Окно просмотра на другом экране…", self.open_view_window))
@@ -356,10 +342,13 @@ class BoardMixin:
             self._sync_tile_toolbar(index)
         if hasattr(self, "board_flow"):
             self._render_board()
-        if (hasattr(self, "inner_window") and self.inner_window.get_visible()
-                and not dash.module_allowed(session, self._current_module_key())):
-            self._close_inner()
+        if "module_tabs" in self.__dict__:
+            for key in list(self.module_tabs.tabs):
+                if not dash.module_allowed(session, key):
+                    self.close_module_tab(key)
+            self._render_module_tabs()
+            if self.module_tabs.active == "home" or not self.module_tabs.tabs:
+                self._render_home()
 
     def _current_module_key(self):
-        page = self.stack.get_visible_child_name() if hasattr(self, "stack") else None
-        return {"archive": "playback", "alarms": "events", "dashboard": "summary"}.get(page, page or "board")
+        return self.module_tabs.active if "module_tabs" in self.__dict__ else "board"
