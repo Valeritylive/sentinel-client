@@ -951,7 +951,7 @@ class MainWindowMixin:
             allowed = [m for m in items if dash.module_allowed(self.session, m.key)]
             if not allowed:
                 continue
-            self.home_box.append(W.label(section, "section-title"))
+            self.home_box.append(self._home_section_header(section))
             flow = Gtk.FlowBox()
             flow.set_selection_mode(Gtk.SelectionMode.NONE)
             flow.set_homogeneous(False)
@@ -986,6 +986,27 @@ class MainWindowMixin:
             tools.append(W.button("Окно просмотра на другом экране…", self.open_view_window, flat=True))
         tools.append(W.button("Раздел при запуске…", self.open_local_settings, flat=True))
         self.home_box.append(tools)
+
+    @staticmethod
+    def _home_section_header(section):
+        """Заголовок группы на Главной: крупное название на цветной разделительной линии."""
+        index = list(module_art.ACCENTS).index(section) if section in module_art.ACCENTS else 0
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        row.add_css_class("home-section")
+        row.add_css_class(f"home-section-{index}")
+        row.set_margin_top(6)
+        lead = Gtk.Box()
+        lead.add_css_class("home-section-lead")
+        lead.set_valign(Gtk.Align.CENTER)
+        row.append(lead)
+        title = W.label(section, "home-section-title")
+        row.append(title)
+        line = Gtk.Box()
+        line.add_css_class("home-section-line")
+        line.set_hexpand(True)
+        line.set_valign(Gtk.Align.CENTER)
+        row.append(line)
+        return row
 
     def _module_picture(self, item):
         """Иллюстрация раздела для плитки (SVG → текстура); при ошибке — крупный значок."""
