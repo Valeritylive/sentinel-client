@@ -100,6 +100,7 @@ ROOT = Path(__file__).resolve().parent
 ALARM_READ_TIMEOUT = 45
 ALARM_RECONNECT_MIN = 2
 ALARM_RECONNECT_MAX = 60
+EXPORT_NO_DATA_SECONDS = 30   # экспорт: столько ждём первые байты видео от регистратора
 Gst.init(None)
 # Имя программы = id приложения: по нему оболочка сопоставляет окно с ярлыком
 # (WM_CLASS в X11, app_id в Wayland). Иначе при запуске из меню рабочий стол
@@ -2312,8 +2313,18 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
                 with opener.open(req, timeout=3) as response:
                     response.read(512)
             except Exception as exc:
-                GLib.idle_add(self.notify, f"PTZ: {exc}")
+                GLib.idle_add(self._ptz_failed, device, protocols.ptz_error_text(exc))
         threading.Thread(target=request, daemon=True).start()
+
+    def _ptz_failed(self, device, text):
+        # Нажатие и отпускание кнопки — два запроса: одно сообщение на камеру за 5 секунд, а не стопка.
+        key = (device.get("host"), device.get("channel"), text)
+        now = time.monotonic()
+        if getattr(self, "_last_ptz_error", (None, 0))[0] == key and now - self._last_ptz_error[1] < 5:
+            return False
+        self._last_ptz_error = (key, now)
+        self.notify(f"PTZ · {device.get('name', '')}: {text}", error=True)
+        return False
 
     def open_ptz_tools(self, *_args):
         state = self.streams.get(self.selected_slot)
@@ -3197,22 +3208,37 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
             GLib.idle_add(self._export_next_clip, ffmpeg, folder, clips, index + 1)
             return
 
+        output = folder / clip["file"]
+        started = time.monotonic()
+
         def wait():
             if job.poll() is None:
+                # Регистратор недоступен или не отдаёт видео: FFmpeg ждёт бесконечно — не держим экспорт.
+                if (time.monotonic() - started > EXPORT_NO_DATA_SECONDS
+                        and (not output.exists() or output.stat().st_size == 0)):
+                    job.stop()
+                    self.notify(f"Экспорт {clip['camera']}: регистратор не отдал видео за "
+                                f"{EXPORT_NO_DATA_SECONDS} с ({match['device']['host']}:"
+                                f"{match['device'].get('rtsp_port', 554)})", error=True)
+                    GLib.timeout_add_seconds(1, wait_stopped)
+                    return GLib.SOURCE_REMOVE
                 return GLib.SOURCE_CONTINUE
+            self._export_next_clip(ffmpeg, folder, clips, index + 1)
+            return GLib.SOURCE_REMOVE
+
+        def wait_stopped():
+            if job.poll() is None:
+                return GLib.SOURCE_CONTINUE
+            try:
+                output.unlink()
+            except FileNotFoundError:
+                pass
             self._export_next_clip(ffmpeg, folder, clips, index + 1)
             return GLib.SOURCE_REMOVE
         GLib.timeout_add_seconds(1, wait)
 
     def _authenticate_device_uri(self, uri, device, credentials):
-        parsed = urllib.parse.urlparse(uri)
-        if parsed.scheme != "rtsp":
-            raise ValueError("Устройство вернуло неподдерживаемую ссылку воспроизведения")
-        user = urllib.parse.quote(credentials["username"], safe="")
-        password = urllib.parse.quote(credentials["password"], safe="")
-        host = parsed.hostname or device["host"]
-        port = f":{parsed.port}" if parsed.port else ""
-        return parsed._replace(netloc=f"{user}:{password}@{host}{port}").geturl()
+        return protocols.playback_uri_for_device(uri, device, credentials)
 
     def _launch_archive(self, device, credentials):
         interval = (credentials.pop("start"), credentials.pop("end"))
@@ -3277,6 +3303,10 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         pipeline.set_property("uri", uri)
         if archive and protocols.archive_rtsp_options(uri):
             pipeline.connect("source-setup", self._archive_source_setup, uri)
+        elif not archive:
+            options = protocols.live_rtsp_options(uri, self.rtsp_transport())
+            if options:
+                pipeline.connect("source-setup", self._live_source_setup, options)
         pipeline.set_property("video-sink", sink)
         pipeline.set_property("mute", True)
         pipeline.set_property("volume", 1.0)
@@ -3307,6 +3337,17 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         self._sync_tile_toolbar(slot_index)
         if hasattr(self, "timeline"):
             self._load_timeline_segments()
+
+    @staticmethod
+    def rtsp_transport():
+        """Транспорт RTSP живого видео из настроек (TCP по умолчанию)."""
+        return protocols.normalize_rtsp_transport(storage.get_setting(protocols.RTSP_TRANSPORT_SETTING, "tcp"))
+
+    @staticmethod
+    def _live_source_setup(_pipeline, source, options):
+        for name, value in options:
+            if source.find_property(name) is not None:
+                Gst.util_set_object_arg(source, name, value)
 
     @staticmethod
     def _archive_source_setup(_pipeline, source, uri):

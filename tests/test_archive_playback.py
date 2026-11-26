@@ -143,9 +143,27 @@ class ArchiveTimeTests(StartPreviewTests):
             handler(player, source, uri)
         self.assertEqual(source.props, {"onvif-mode": "true", "protocols": "tcp"})
 
-    def test_live_has_no_source_hook(self):
+    def test_live_rtsp_uses_tcp_by_default(self):
+        live = self._start({"playbin3", "playbin", "appsink"})
+        handler, options = live.props["_signals"]["source-setup"]
+        source = FakeRtspSrc()
+        with patch.object(app_module, "Gst", FakeGst(set())):
+            handler(live, source, options)
+        self.assertEqual(source.props, {"protocols": "tcp"})
+
+    def test_live_auto_transport_has_no_source_hook(self):
+        storage.set_setting(protocols.RTSP_TRANSPORT_SETTING, "auto")
         live = self._start({"playbin3", "playbin", "appsink"})
         self.assertNotIn("source-setup", live.props.get("_signals", {}))
+
+    def test_live_udp_transport(self):
+        storage.set_setting(protocols.RTSP_TRANSPORT_SETTING, "udp")
+        live = self._start({"playbin3", "playbin", "appsink"})
+        handler, options = live.props["_signals"]["source-setup"]
+        source = FakeRtspSrc()
+        with patch.object(app_module, "Gst", FakeGst(set())):
+            handler(live, source, options)
+        self.assertEqual(source.props, {"protocols": "udp+udp-mcast"})
 
     def test_local_file_has_no_source_hook(self):
         local = self._start({"playbin3", "playbin", "appsink"}, direct_uri="file:///tmp/x.mkv",

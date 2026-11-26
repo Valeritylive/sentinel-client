@@ -19,6 +19,7 @@ import sentinel_devmgmt as devmgmt
 import sentinel_discovery as discovery
 import sentinel_hikconnect as hikconnect
 import sentinel_people as people
+import sentinel_protocols as protocols
 import sentinel_recording as recording
 import sentinel_security as security
 import sentinel_storage as storage
@@ -1897,7 +1898,16 @@ class SystemWindow(Gtk.Window):
                                                              modes.index(settings["mode"])))
         backend = _field(form, 1, "Интерфейс видеокарты", _dropdown([t for _b, t in decoding.BACKENDS],
                                                                      backends.index(settings["backend"])))
+        transports = [t for t, _title in protocols.RTSP_TRANSPORTS]
+        current_transport = protocols.normalize_rtsp_transport(
+            storage.get_setting(protocols.RTSP_TRANSPORT_SETTING, "tcp"))
+        transport = _field(form, 2, "Транспорт RTSP (живое видео)",
+                           _dropdown([title for _t, title in protocols.RTSP_TRANSPORTS],
+                                     transports.index(current_transport)))
         box.append(form)
+        box.append(W.label("TCP открывает видео регистраторов через интернет и проброс портов за 1–2 секунды. "
+                           "«Автоматически» сначала ждёт UDP 5 секунд. Архив всегда идёт по TCP.",
+                           "muted", wrap=True))
         try:
             hardware = decoding.hardware_decoders(decoding.video_decoders())
         except Exception:       # GStreamer недоступен
@@ -1920,10 +1930,12 @@ class SystemWindow(Gtk.Window):
 
         def save():
             chosen = decoding.save_settings(modes[mode.get_selected()], backends[backend.get_selected()])
+            chosen_transport = transports[transport.get_selected()]
+            storage.set_setting(protocols.RTSP_TRANSPORT_SETTING, chosen_transport)
             restarted = self.owner.apply_decoding(restart=True)
             status.set_text(self.owner.decoding_status)
             alarms.log_operation(self.owner.session.username, "Декодирование видео",
-                                 f"{chosen['mode']} / {chosen['backend']}")
+                                 f"{chosen['mode']} / {chosen['backend']} / RTSP {chosen_transport}")
             self.owner.notify(self.owner.decoding_status
                               + (f" Переоткрыто окон: {restarted}." if restarted else ""))
             GLib.timeout_add_seconds(3, lambda: (show_windows(), False)[1])
@@ -1937,7 +1949,7 @@ class SystemWindow(Gtk.Window):
         box.append(W.label("Живые окна переоткрываются сразу. Архив и окна, открытые через облако, возьмут новый "
                            "режим при следующем открытии.", "muted", wrap=True))
         show_windows()
-        self.decoding_page = {"mode": mode, "backend": backend, "save": save, "status": status,
+        self.decoding_page = {"mode": mode, "backend": backend, "transport": transport, "save": save, "status": status,
                               "windows": windows, "found": found}
         return box
 

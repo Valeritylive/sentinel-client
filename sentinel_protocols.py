@@ -131,7 +131,10 @@ def iter_alert_payloads(response, stop_event: threading.Event):
     buffer = b""
     closing = b"</EventNotificationAlert>"
     while not stop_event.is_set():
-        chunk = response.read(4096)
+        # read1: отдать то, что уже пришло. read(4096) ждёт полные 4 КБ, а событие NVR — около 600 байт,
+        # поэтому тревога доходила с задержкой в несколько сердцебиений (минуты).
+        reader = getattr(response, "read1", None)
+        chunk = reader(4096) if reader is not None else response.read(4096)
         if not chunk:
             if stop_event.is_set():
                 return
@@ -276,3 +279,63 @@ ARCHIVE_RTSP_OPTIONS = (("onvif-mode", "true"), ("protocols", "tcp"))
 def archive_rtsp_options(uri: str) -> tuple[tuple[str, str], ...]:
     """Свойства rtspsrc для архива (пусто для файлов и не-RTSP)."""
     return ARCHIVE_RTSP_OPTIONS if (uri or "").lower().startswith("rtsp") else ()
+
+
+# Транспорт RTSP живого видео (настройка «Видео и декодирование»). rtspsrc по умолчанию пробует UDP
+# и только через 5 секунд тишины переходит на TCP: регистратор за NAT или через проброс портов
+# UDP не присылает, и первый кадр появлялся через 7–10 секунд вместо 2.
+RTSP_TRANSPORT_SETTING = "rtsp_transport"
+RTSP_TRANSPORTS = (("tcp", "TCP (надёжно, через интернет и NAT)"),
+                   ("auto", "Автоматически (сначала UDP, затем TCP)"),
+                   ("udp", "UDP (только локальная сеть)"))
+_RTSP_PROTOCOLS = {"tcp": "tcp", "udp": "udp+udp-mcast"}
+
+
+def normalize_rtsp_transport(value) -> str:
+    return value if value in dict(RTSP_TRANSPORTS) else "tcp"
+
+
+def live_rtsp_options(uri: str, transport: str = "tcp") -> tuple[tuple[str, str], ...]:
+    """Свойства rtspsrc для живого видео по выбранному транспорту (пусто для не-RTSP и «Авто»)."""
+    if not (uri or "").lower().startswith("rtsp"):
+        return ()
+    protocols = _RTSP_PROTOCOLS.get(normalize_rtsp_transport(transport))
+    return (("protocols", protocols),) if protocols else ()
+
+
+def playback_uri_for_device(uri: str, device, credentials) -> str:
+    """playbackURI из поиска -> адрес, по которому этот компьютер достучится до регистратора.
+
+    NVR пишет в playbackURI свой адрес в локальной сети (rtsp://192.168.88.4:554/…). Регистратор,
+    добавленный по внешнему IP с пробросом портов (внешний IP и проброшенный порт), по такой ссылке
+    недоступен: архив из результатов поиска не открывался, а экспорт зависал. Адрес и RTSP-порт
+    берутся из настроек устройства, путь и параметры (starttime/endtime, name, size) — из ссылки NVR.
+    """
+    parsed = urllib.parse.urlparse(uri or "")
+    if parsed.scheme.lower() != "rtsp":
+        raise ValueError("Устройство вернуло неподдерживаемую ссылку воспроизведения")
+    user = urllib.parse.quote(credentials.get("username", ""), safe="")
+    password = urllib.parse.quote(credentials.get("password", ""), safe="")
+    host = device.get("host") or parsed.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    port = device.get("rtsp_port") or parsed.port
+    return parsed._replace(netloc=f"{user}:{password}@{host}" + (f":{int(port)}" if port else "")).geturl()
+
+
+def ptz_error_text(exc) -> str:
+    """Понятный текст ошибки PTZ: камера без PTZ отвечает 403 «notSupport»."""
+    import urllib.error
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            body = exc.read(2048).decode("utf-8", "replace")
+        except Exception:
+            body = ""
+        if "notSupport" in body or "Invalid Operation" in body or exc.code == 404:
+            return "камера не поддерживает поворот и зум (PTZ)"
+        if exc.code == 401:
+            return "нет прав на управление PTZ у этой учётной записи"
+        return f"устройство ответило HTTP {exc.code}"
+    if isinstance(exc, urllib.error.URLError):
+        return f"устройство недоступно ({exc.reason})"
+    return str(exc)

@@ -225,10 +225,12 @@ class SystemSmoke(ShellSmoke):
         applied = []
         with patch.object(page["mode"], "get_selected", return_value=1), \
                 patch.object(page["backend"], "get_selected", return_value=2), \
+                patch.object(page["transport"], "get_selected", return_value=1), \
                 patch.object(decoding, "apply", lambda settings=None, registry=None: (
                     applied.append(settings or decoding.load_settings()), (None, "проверка"))[1]):
             page["save"]()
         self.assertEqual(decoding.load_settings(), {"mode": "gpu", "backend": "vaapi"})
+        self.assertEqual(storage.get_setting("rtsp_transport"), "auto")
         self.assertEqual(applied[-1]["mode"], "gpu")
         self.assertEqual(self.win.decoding_status, "проверка")
         self.assertEqual(self.win.active_decoders(), [])
