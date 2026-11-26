@@ -62,6 +62,7 @@ from sentinel_ops_ui import OpsMixin
 from sentinel_wall_ui import WallEvidenceMixin
 import sentinel_layouts as layouts
 import sentinel_protocols as protocols
+import sentinel_decoding as decoding
 import sentinel_shell as shell
 from sentinel_protocols import (
     FfmpegJob,
@@ -136,6 +137,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         self.allow_insecure_basic = settings.get("allow_insecure_basic") == "1"
         set_allow_insecure_basic(self.allow_insecure_basic)
         self.streams = {}
+        self.decoding_backend, self.decoding_status = decoding.apply()
         self.maximized_slot = None
         self.monitor_windows = []
         self.monitor_sequence = 0
@@ -1523,7 +1525,29 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         device = state["device"]
         self.notify(f"{device['name']}\n{device['host']} · канал {device['channel']}\n"
                     f"Поток: {'дополнительный' if device.get('stream') == 'sub' else 'основной'}\n"
-                    f"Адрес RTSP: {device['host']}:{device['rtsp_port']}")
+                    f"Адрес RTSP: {device['host']}:{device['rtsp_port']}\n"
+                    f"Декодер: {decoding.decoder_title(decoding.pipeline_decoder(state['pipeline']))}")
+
+    def active_decoders(self):
+        """[(номер окна, имя камеры, декодер)] для открытых окон видео."""
+        return [(slot + 1, state["device"].get("name", ""), decoding.pipeline_decoder(state["pipeline"]))
+                for slot, state in sorted(self.streams.items())]
+
+    def apply_decoding(self, restart=True):
+        """Применить настройку декодирования; живые окна переоткрываются, чтобы взять новый декодер."""
+        self.decoding_backend, self.decoding_status = decoding.apply()
+        restarted = 0
+        if restart:
+            for slot, state in list(self.streams.items()):
+                if state.get("playback") or state.get("cloud"):
+                    continue
+                try:
+                    self._start_preview(slot, state["base_device"], state["credentials"],
+                                        stream_override=state["device"].get("stream"))
+                    restarted += 1
+                except Exception as exc:
+                    self.notify(str(exc), error=True)
+        return restarted
 
     def _digital_zoom(self, slot, direction):
         state = self.streams.get(slot)

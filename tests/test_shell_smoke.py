@@ -205,6 +205,21 @@ class SystemSmoke(ShellSmoke):
         system.manage_schedules()
         self.win.open_system("config", "storage")
 
+    def test_decoding_page_saves_and_applies(self):
+        import sentinel_decoding as decoding
+        self.win.open_system("config", "decoding")
+        page = self.win.system_window.decoding_page
+        applied = []
+        with patch.object(page["mode"], "get_selected", return_value=1), \
+                patch.object(page["backend"], "get_selected", return_value=2), \
+                patch.object(decoding, "apply", lambda settings=None, registry=None: (
+                    applied.append(settings or decoding.load_settings()), (None, "проверка"))[1]):
+            page["save"]()
+        self.assertEqual(decoding.load_settings(), {"mode": "gpu", "backend": "vaapi"})
+        self.assertEqual(applied[-1]["mode"], "gpu")
+        self.assertEqual(self.win.decoding_status, "проверка")
+        self.assertEqual(self.win.active_decoders(), [])
+
     def test_shortcuts_run(self):
         for key in views.load_shortcuts():
             self.win.run_shortcut(key)
