@@ -440,8 +440,18 @@ class ServerLink:
         if backup and backup != primary:
             client = self.find_active([primary, backup], verify_tls, ca_file)
         else:
-            client = remote.ServerClient(primary, verify_tls=verify_tls, ca_file=ca_file or None)
-        client.login(username, password)
+            client = remote.ServerClient(url, verify_tls=verify_tls, ca_file=ca_file or None)
+            try:
+                client.login(username, password)
+            except remote.RemoteError as exc:
+                # адрес введён без http:// или https:// и схема не угадана — пробуем другую сами
+                if remote.has_scheme(url) or not (exc.plain_http or exc.tls_required):
+                    raise
+                scheme = "http://" if exc.plain_http else "https://"
+                client = remote.ServerClient(scheme + url.strip(), verify_tls=verify_tls, ca_file=ca_file or None)
+            primary = client.base_url
+        if not client.token:
+            client.login(username, password)
         summary = client.system()
         self.disconnect()
         with self._lock:
@@ -673,7 +683,7 @@ def open_server_dialog(owner):
                        "пользователи, правила тревог и аккаунты Hik-Connect на сервере.", "muted", wrap=True))
     form = _form()
     url = _field(form, 0, "Адрес сервера", Gtk.Entry(text=settings.get("url") or "",
-                                                       placeholder_text="https://server:8765"))
+                                                       placeholder_text="http://127.0.0.1:8765 или https://сервер:8765"))
     backup = _field(form, 1, "Резервный сервер", Gtk.Entry(text=settings.get("backup_url") or "",
                                                             placeholder_text="необязательно: https://standby:8765"))
     user = _field(form, 2, "Пользователь", Gtk.Entry(text=settings.get("username") or "admin"))

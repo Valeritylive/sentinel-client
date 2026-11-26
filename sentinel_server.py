@@ -976,6 +976,40 @@ def cmd_create_admin(args):
     print(f"Пользователь {args.username} создан (роль «Администратор»)")
 
 
+def cmd_reset_password(args):
+    """Задать пароль пользователю (по умолчанию admin); нет такого — создать с ролью «Администратор».
+
+    Снимает блокировку после неверных попыток и включает учётную запись. Нужен, когда пароль
+    забыт или сервер ещё не активирован; окно настроек сервера вызывает эту же команду.
+    """
+    security.ensure_builtin_roles()
+    username = (args.username or "admin").strip()
+    password = _read_new_password("Новый пароль: ")
+    user = next((u for u in security.load_users() if u["username"] == username), None)
+    if user is None:
+        if username == "admin" and not security.has_users():
+            security.ensure_admin(password)
+        else:
+            roles = {r["name"]: r["id"] for r in security.load_roles()}
+            security.create_user(username, password, roles["Администратор"], policy=security.load_policy())
+        print(f"Пользователь {username} создан (роль «Администратор»)")
+        return
+    security.reset_password(user["id"], password, username, security.load_policy())
+    security.update_user(user["id"], enabled=True)
+    print(f"Пароль пользователя {username} изменён")
+
+
+def cmd_list_users(args):
+    users = [{"username": u["username"], "role": u["role_name"] or "", "enabled": bool(u["enabled"]),
+              "locked_until": u["locked_until"] or ""} for u in security.load_users()]
+    if args.json:
+        print(json.dumps({"users": users}, ensure_ascii=False))
+        return
+    for u in users:
+        flags = "" if u["enabled"] else " (отключён)"
+        print(f"{u['username']:<24} {u['role']}{flags}")
+
+
 def cmd_hikconnect_login(args):
     password = os.environ.get("HIKCONNECT_PASSWORD") or getpass.getpass("Пароль Hik-Connect: ")
     url = _region_url({"region": args.region, "api_url": args.api_url})
@@ -994,7 +1028,7 @@ def cmd_hikconnect_devices(_args):
               f" {d['local_ip'] or d['wan_ip']}")
 
 
-COMMANDS = ("run", "create-admin", "hikconnect-login", "hikconnect-devices", "cluster-init", "cluster-status")
+COMMANDS = ("run", "create-admin", "reset-password", "list-users", "hikconnect-login", "hikconnect-devices", "cluster-init", "cluster-status")
 
 
 def cmd_cluster_init(args):
@@ -1046,6 +1080,11 @@ def build_parser():
     admin = sub.add_parser("create-admin", parents=[common],
                            help="создать администратора (пароль из SENTINEL_ADMIN_PASSWORD или ввод)")
     admin.add_argument("--username", default="admin")
+    reset = sub.add_parser("reset-password", parents=[common],
+                           help="задать или сбросить пароль (по умолчанию admin), снять блокировку")
+    reset.add_argument("--username", default="admin")
+    users = sub.add_parser("list-users", parents=[common], help="показать пользователей сервера")
+    users.add_argument("--json", action="store_true")
     hc_login = sub.add_parser("hikconnect-login", parents=[common],
                               help="войти в аккаунт Hik-Connect и загрузить устройства")
     hc_login.add_argument("--account", required=True)
@@ -1079,9 +1118,10 @@ def main(argv=None):
     if getattr(args, "data_dir", None):
         storage.DATA = Path(args.data_dir).expanduser()
         storage.DB_PATH = storage.DATA / "devices.sqlite3"
-    handlers = {"run": cmd_run, "create-admin": cmd_create_admin, "hikconnect-login": cmd_hikconnect_login,
-                "hikconnect-devices": cmd_hikconnect_devices, "cluster-init": cmd_cluster_init,
-                "cluster-status": cmd_cluster_status}
+    handlers = {"run": cmd_run, "create-admin": cmd_create_admin,
+                "reset-password": cmd_reset_password, "list-users": cmd_list_users,
+                "hikconnect-login": cmd_hikconnect_login, "hikconnect-devices": cmd_hikconnect_devices,
+                "cluster-init": cmd_cluster_init, "cluster-status": cmd_cluster_status}
     try:
         handlers[args.command](args)
     except (ValueError, hikconnect.HikConnectError, storage.CredentialStoreError) as exc:
