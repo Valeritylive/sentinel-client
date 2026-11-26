@@ -70,7 +70,7 @@ def verify_password(password, encoded):
 
 
 def password_strength(password):
-    """0..3: слабый / средний / хороший / надёжный (как полоска в HikCentral)."""
+    """0..3: слабый / средний / хороший / надёжный."""
     if not password:
         return 0
     classes = sum(bool(any(test(c) for c in password)) for test in
@@ -165,7 +165,7 @@ def create_user(username, password, role_id, email="", expires="", policy=None):
 
 
 def ensure_admin(password):
-    """Первый запуск: создать admin (активация, как в HikCentral)."""
+    """Первый запуск: создать admin (активация)."""
     ensure_builtin_roles()
     with storage.database() as db:
         role = db.execute("SELECT id FROM roles WHERE name='Администратор'").fetchone()["id"]

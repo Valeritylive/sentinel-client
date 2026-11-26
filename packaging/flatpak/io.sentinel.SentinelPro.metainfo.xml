@@ -1,24 +1,31 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.sentinel.VideoClient</id>
+  <id>io.sentinel.SentinelPro</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
-  <name>Sentinel Video Client</name>
-  <summary>Video surveillance client for Hikvision and RTSP cameras</summary>
+  <name>Sentinel PRO</name>
+  <summary>Universal security management center</summary>
   <description>
     <p>
-      Sentinel is a local Linux client for video surveillance in the style of HikCentral Lite and iVMS-4200:
+      Sentinel PRO is a universal security management center for Linux:
       live view with saved views, playback with a recording timeline, alarms and events, ANPR vehicle lists,
       access control, e-maps and backup recording to the local computer.
     </p>
   </description>
-  <launchable type="desktop-id">io.sentinel.VideoClient.desktop</launchable>
-  <url type="homepage">https://github.com/Valeritylive/sentinel-video-client</url>
+  <launchable type="desktop-id">io.sentinel.SentinelPro.desktop</launchable>
+  <provides>
+    <id>io.sentinel.VideoClient</id>
+  </provides>
+  <replaces>
+    <id>io.sentinel.VideoClient</id>
+  </replaces>
+  <url type="homepage">https://github.com/Valeritylive/sentinel-client</url>
   <developer id="io.sentinel">
     <name>Sentinel contributors</name>
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.6.4.3" date="2026-11-26"/>
     <release version="0.6.4.2" date="2026-11-26"/>
     <release version="0.6.4.1" date="2026-11-26"/>
     <release version="0.6.4" date="2026-11-26"/>

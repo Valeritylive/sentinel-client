@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sentinel: native GTK 4 Linux client for video surveillance."""
+"""Sentinel PRO: native GTK 4 Linux security management center."""
 from __future__ import annotations
 
 import csv
@@ -94,7 +94,7 @@ from sentinel_storage import (
     save_credentials,
 )
 
-APP_ID = "io.sentinel.VideoClient"
+APP_ID = "io.sentinel.SentinelPro"
 APP_VERSION = Path(__file__).resolve().parent.joinpath("VERSION").read_text(encoding="utf-8").strip()
 ROOT = Path(__file__).resolve().parent
 # Hikvision sends a keep-alive roughly every 10 s; a short socket timeout kills a healthy alert stream.
@@ -107,7 +107,7 @@ Gst.init(None)
 # (WM_CLASS в X11, app_id в Wayland). Иначе при запуске из меню рабочий стол
 # ждёт «своё» окно до таймаута, и запуск выглядит очень долгим.
 GLib.set_prgname(APP_ID)
-GLib.set_application_name("Sentinel")
+GLib.set_application_name("Sentinel PRO")
 
 
 def stylesheet():
@@ -124,7 +124,7 @@ def make_label(text: str, css_class: str | None = None):
 
 class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixin, OpsMixin, WallEvidenceMixin, MainWindowMixin, ServicesMixin, TileBarMixin, Gtk.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="Sentinel — видеонаблюдение")
+        super().__init__(application=app, title="Sentinel PRO — центр управления безопасностью")
         self.set_resizable(True)
         self.set_default_size(*self._initial_window_size(1440, 900))
         self.devices = load_devices()
@@ -788,7 +788,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
             raise ValueError("Выберите контроллер")
         device = self.devices[selected]
         if device["protocol"] != "hikvision":
-            raise ValueError("Контроль доступа по ISAPI доступен для устройств Hikvision")
+            raise ValueError("Контроль доступа по ISAPI доступен для ISAPI-устройств")
         username = self.access_user.get_text().strip()
         if not username:
             known = self.session_credentials.get(device["id"])
@@ -1442,7 +1442,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         def check(camera, credentials):
             threading.Thread(target=self._camera_status_worker, args=(camera, credentials), daemon=True).start()
         if device["protocol"] != "hikvision":
-            self.notify(f"{device['name']}\nПроверка состояния доступна только для Hikvision.")
+            self.notify(f"{device['name']}\nПроверка состояния доступна только для ISAPI-устройств.")
             return
         self._credentials_dialog("Состояние · " + device["name"], device, check)
 
@@ -1472,7 +1472,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
 
     def sync_device_time(self, device):
         if device["protocol"] != "hikvision":
-            self.notify("Синхронизация времени доступна только для Hikvision")
+            self.notify("Синхронизация времени доступна только для ISAPI-устройств")
             return
         dialog = Gtk.MessageDialog(
             transient_for=self, modal=True, message_type=Gtk.MessageType.WARNING,
@@ -1521,7 +1521,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
             self.notify("Выберите окно с активной камерой")
             return
         if state["device"].get("protocol") != "hikvision":
-            self.notify("Переключение потока доступно для Hikvision RTSP")
+            self.notify("Переключение потока доступно для ISAPI-устройств")
             return
         self._start_preview(self.selected_slot, state["base_device"], state["credentials"],
                             stream_override=stream_type)
@@ -1672,13 +1672,13 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         fields = {}
         for row, (key, title, value) in enumerate((
             ("name", "Название", ""), ("host", "IP-адрес или DNS", ""),
-            ("protocol", "Протокол", "Hikvision RTSP"), ("sdk_port", "SDK-порт", "8000"),
+            ("protocol", "Протокол", "ISAPI / RTSP"), ("sdk_port", "SDK-порт", "8000"),
             ("http_port", "HTTP-порт", "80"), ("rtsp_port", "RTSP-порт", "554"),
             ("stream", "Поток", "Основной"), ("username", "Имя пользователя", ""),
             ("password", "Пароль устройства", ""))):
             grid.attach(make_label(title, "muted"), 0, row, 1, 1)
             if key == "protocol":
-                widget = Gtk.DropDown.new_from_strings(["Hikvision RTSP", "Пользовательский RTSP"])
+                widget = Gtk.DropDown.new_from_strings(["ISAPI / RTSP (автонастройка)", "Пользовательский RTSP"])
             elif key == "stream":
                 widget = Gtk.DropDown.new_from_strings(["Основной", "Дополнительный"])
             elif key == "password":
@@ -1786,7 +1786,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
                     self.notify(str(exc))
                     return
                 if protocol != "hikvision":
-                    self.notify("Диапазон IP поддерживается только для Hikvision")
+                    self.notify("Диапазон IP поддерживается только для ISAPI-устройств")
                     return
             group_name = fields["group"].get_text().strip()
             device = {
@@ -1954,7 +1954,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
                 + f". Ответы остальных путей: {details}"
             )
         raise RuntimeError(
-            "HTTP-порт отвечает, но ISAPI Hikvision там не найден (HTTP 404 на всех путях): похоже, на этом "
+            "HTTP-порт отвечает, но ISAPI там не найден (HTTP 404 на всех путях): похоже, на этом "
             "порту работает не регистратор (роутер или другой веб-сервер) либо устройство без ISAPI. "
             "Проверьте HTTP-порт или отметьте «Не определять каналы автоматически» и укажите каналы вручную. "
             f"Подробности: {details}")
@@ -2042,11 +2042,11 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
             if credentials:
                 self.session_credentials[device["id"]] = dict(credentials)
         if not credentials and device.get("cloud_serial"):
-            # Устройство из Hik-Connect: без пароля регистратора видео идёт через облако.
+            # Устройство из облака P2P: без пароля регистратора видео идёт через облако.
             credentials = {"username": "", "password": ""}
         return credentials
 
-    # ------------------------------------------------------------ облачное видео Hik-Connect
+    # ------------------------------------------------------------ облачное видео P2P
     def _cloud_preferred(self, device):
         return bool(device.get("cloud_serial")) and storage.get_setting(
             f"cloud_video:{device['cloud_serial']}") == "1"
@@ -2070,7 +2070,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         except cloudstream.CloudStreamError as exc:
             if exc.code == "runtime":
                 self._install_cloud_runtime()
-                raise RuntimeError("Устанавливается модуль облачного видео Hik-Connect (один раз, около минуты). "
+                raise RuntimeError("Устанавливается модуль облачного видео P2P (один раз, около минуты). "
                                    "Откройте камеру снова, когда появится сообщение об установке.") from exc
             raise RuntimeError(f"{device['name']}: {exc}") from exc
 
@@ -2103,7 +2103,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         def work():
             try:
                 cloudstream.install_runtime()
-                message = "Модуль облачного видео Hik-Connect установлен. Откройте камеру снова."
+                message = "Модуль облачного видео P2P установлен. Откройте камеру снова."
             except Exception as exc:
                 message = f"Не удалось установить модуль облачного видео: {exc}"
             GLib.idle_add(finish, message)
@@ -2181,7 +2181,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
             except (OSError, RuntimeError, subprocess.TimeoutExpired):
                 credentials = None
             if not credentials and device.get("cloud_serial"):
-                credentials = {"username": "", "password": ""}     # видео через облако Hik-Connect
+                credentials = {"username": "", "password": ""}     # видео через облако P2P
             if credentials:
                 start_camera(slot_index, device, credentials)
                 progress["index"] += 1
@@ -2323,7 +2323,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
     def _send_ptz(self, pan, tilt, zoom):
         state = self.streams.get(self.selected_slot)
         if not state:
-            self.notify("Сначала выберите активный Hikvision PTZ-поток")
+            self.notify("Сначала выберите активный PTZ-поток ISAPI-устройства")
             return
         device = state["device"]
         creds = state["credentials"]
@@ -2354,7 +2354,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
     def open_ptz_tools(self, *_args):
         state = self.streams.get(self.selected_slot)
         if not state or state["device"].get("protocol") != "hikvision":
-            self.notify("Выберите активную Hikvision PTZ-камеру")
+            self.notify("Выберите активную PTZ-камеру (ISAPI)")
             return
         device, credentials = state["device"], state["credentials"]
         channel = device["channel"]
@@ -2481,7 +2481,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
             self.notify("Устройство события больше не находится в каталоге")
             return
         if device["protocol"] != "hikvision":
-            self.notify("Архив тревоги доступен для Hikvision через ISAPI/RTSP")
+            self.notify("Архив тревоги доступен для ISAPI-устройств")
             return
         try:
             event_time = parse_device_time(event["time"])
@@ -2856,7 +2856,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
                 if token != self.archive_query_token:
                     return
                 if device.get("protocol") != "hikvision":
-                    problems.append(f"{device['name']}: поиск доступен для Hikvision с ISAPI")
+                    problems.append(f"{device['name']}: поиск доступен для ISAPI-устройств")
                     continue
                 if not credentials or not credentials.get("username"):
                     problems.append(f"{device['name']}: нет сохранённого пароля")
@@ -3349,13 +3349,13 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         self.streams[slot_index] = state
         self.video_slots[slot_index]["device"] = preview_device
         mode = "ARCHIVE" if state["playback"] else "LIVE"
-        source = "Hik-Connect" if cloud else preview_device["host"]
+        source = "Облако P2P" if cloud else preview_device["host"]
         self.video_slots[slot_index]["caption"].set_text(
             f"● {mode}   {preview_device['name']}  ·  {source} CH {preview_device['channel']}")
         placeholder = self.video_slots[slot_index]["placeholder"]
         if cloud:
             # Облако отдаёт первый кадр через 5–15 секунд: показываем, что идёт подключение.
-            placeholder.set_text(f"{slot_index + 1}\n\nПодключение через облако Hik-Connect…")
+            placeholder.set_text(f"{slot_index + 1}\n\nПодключение через облако P2P…")
             placeholder.set_visible(True)
             GLib.timeout_add_seconds(40, self._cloud_first_frame_timeout, state)
         else:
@@ -3497,7 +3497,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         hint = hikconnect.stream_failure_hint(device, message)
         if (hint and device and not state.get("playback") and hikconnect.is_private_host(device.get("host"))
                 and not self._cloud_preferred(device)):
-            # Прямой адрес из Hik-Connect недоступен: дальше этот регистратор смотрим через облако.
+            # Прямой адрес из облака P2P недоступен: дальше этот регистратор смотрим через облако.
             storage.set_setting(f"cloud_video:{device['cloud_serial']}", "1")
             credentials = state.get("credentials") or {}
             stream = state.get("device", {}).get("stream")
@@ -3505,7 +3505,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
             try:
                 self._start_preview(slot, device, credentials, stream_override=stream)
                 self.notify(f"{device.get('host_name') or device['name']}: прямого доступа нет, "
-                            "видео идёт через облако Hik-Connect")
+                            "видео идёт через облако P2P")
                 return GLib.SOURCE_REMOVE
             except Exception as exc:
                 hint = f"{hint}\n{exc}"
@@ -3594,7 +3594,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
             self.notify("Запись остановлена")
             return
         if state.get("cloud") is not None:
-            self.notify("Запись облачного потока Hik-Connect пока не поддерживается")
+            self.notify("Запись облачного потока P2P пока не поддерживается")
             return
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
@@ -3684,7 +3684,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
 class MonitorWindow(SentinelWindow):
     def __init__(self, parent, window_number, name, physical_monitor_count, camera_capacity, monitor_index, saved_window_id):
         Gtk.ApplicationWindow.__init__(self, application=parent.get_application(),
-            title=f"Sentinel — {name} · до {camera_capacity} камер")
+            title=f"Sentinel PRO — {name} · до {camera_capacity} камер")
         self.parent_window = parent
         self.window_number = window_number
         self.window_name = name

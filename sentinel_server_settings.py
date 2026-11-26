@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Окно настроек Sentinel Server (GTK 4): состояние службы, логин и пароль администратора, сеть и TLS.
+"""Окно настроек Sentinel PRO Server (GTK 4): состояние службы, логин и пароль администратора, сеть и TLS.
 
-Запуск: ``sentinel-server-settings`` (или из меню «Настройки Sentinel Server»).
+Запуск: ``sentinel-server-settings`` (или из меню «Настройки Sentinel PRO Server»).
 ``--setup`` сразу открывает окно «Задайте пароль администратора» (так делает значок в трее,
 когда сервер запущен впервые и администратора ещё нет).
 
@@ -123,7 +123,7 @@ class SetupDialog(Gtk.Window):
     """«Задайте логин и пароль администратора» — сервер запущен, а пользователей ещё нет."""
 
     def __init__(self, parent, on_done=None):
-        super().__init__(title="Первый запуск Sentinel Server", transient_for=parent, modal=True)
+        super().__init__(title="Первый запуск Sentinel PRO Server", transient_for=parent, modal=True)
         self.on_done = on_done
         self.set_default_size(460, -1)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -175,7 +175,7 @@ class SetupDialog(Gtk.Window):
 # ==================================================================== главное окно
 class SettingsWindow(Gtk.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="Настройки Sentinel Server")
+        super().__init__(application=app, title="Настройки Sentinel PRO Server")
         self.set_default_size(720, 760)
         self.set_icon_name("io.sentinel.Server")
         self.status = None
@@ -229,7 +229,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
         self.urls_label.set_selectable(True)
         urls.append(self.urls_label)
         copy = W.button("Копировать", self.copy_url, tooltip="Скопировать адрес — вставьте его в клиенте "
-                                                            "(меню пользователя › «Сервер Sentinel…»)")
+                                                            "(меню пользователя › «Сервер Sentinel PRO…»)")
         copy.set_hexpand(True)
         copy.set_halign(Gtk.Align.END)
         copy.set_valign(Gtk.Align.START)
@@ -645,7 +645,7 @@ class SettingsWindow(Gtk.ApplicationWindow):
         run_async(ctl.generate_certificate, done)
 
     def show_journal(self):
-        window = Gtk.Window(title="Журнал Sentinel Server", transient_for=self)
+        window = Gtk.Window(title="Журнал Sentinel PRO Server", transient_for=self)
         window.set_default_size(900, 520)
         view = Gtk.TextView(editable=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD_CHAR)
         scroller = Gtk.ScrolledWindow()

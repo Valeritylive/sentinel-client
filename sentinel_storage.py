@@ -9,7 +9,9 @@ import subprocess
 import threading
 from pathlib import Path
 
-APP_ID = "io.sentinel.VideoClient"
+# Атрибут записей в системном хранилище секретов. Не менять: по нему находятся пароли,
+# сохранённые прежними версиями (до переименования в Sentinel PRO id был таким же).
+SECRET_APPLICATION = "io.sentinel.VideoClient"
 SECRET_LABEL = "Sentinel camera credentials"
 # SENTINEL_DATA_DIR позволяет серверу (служба systemd) держать свою базу отдельно от клиента.
 DATA = (Path(os.environ["SENTINEL_DATA_DIR"]).expanduser() if os.environ.get("SENTINEL_DATA_DIR")
@@ -122,7 +124,7 @@ def _migrate_ivms_model(db: sqlite3.Connection) -> None:
 
 
 def _migrate_hcl_model(db: sqlite3.Connection) -> None:
-    """Таблицы модулей в стиле HikCentral Lite: виды, персоны, ТС, доступ, тревоги, пользователи."""
+    """Таблицы модулей: виды, персоны, ТС, доступ, тревоги, пользователи."""
     db.execute("""CREATE TABLE IF NOT EXISTS view_groups (
         id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)""")
     # Виды на сервере: приватные (owner) и публичные; камеры — по адресу и каналу.
@@ -229,7 +231,7 @@ def _migrate_hcl_model(db: sqlite3.Connection) -> None:
 
 
 def _migrate_cloud_model(db: sqlite3.Connection) -> None:
-    """Облачные аккаунты (Hik-Connect) и снимок привязанных к ним устройств."""
+    """Облачные аккаунты (облако P2P) и снимок привязанных к ним устройств."""
     db.execute("""CREATE TABLE IF NOT EXISTS cloud_accounts (
         id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL DEFAULT 'hikconnect',
         account TEXT NOT NULL, api_url TEXT NOT NULL DEFAULT '', remember_password INTEGER NOT NULL DEFAULT 0,
@@ -426,7 +428,7 @@ def _secret_tool(action: str, device, secret: str | None = None) -> str | None:
     if action == "store":
         command.append(f"--label={SECRET_LABEL}")
     command.extend((
-        "application", APP_ID,
+        "application", SECRET_APPLICATION,
         "host", str(device["host"]),
         "http_port", str(int(device.get("http_port", 80))),
     ))

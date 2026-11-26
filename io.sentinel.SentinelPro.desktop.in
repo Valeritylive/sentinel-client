@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Sentinel PRO
+GenericName=Security Management Center
+GenericName[ru]=Центр управления безопасностью
+Comment=Universal security management center: video, access control, alarms
+Comment[ru]=Универсальный центр управления безопасностью: видео, доступ, тревоги
+Exec=/usr/bin/python3 "@APP_PATH@"
+Icon=io.sentinel.SentinelPro
+Terminal=false
+Categories=AudioVideo;Video;Security;
+StartupNotify=true
+StartupWMClass=io.sentinel.SentinelPro
+X-Flatpak-RenamedFrom=io.sentinel.VideoClient.desktop;

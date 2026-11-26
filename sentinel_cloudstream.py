@@ -1,6 +1,6 @@
-"""Живое видео устройств Hik-Connect через облачный ретранслятор (VTM), без прямого доступа к регистратору.
+"""Живое видео устройств облака P2P через облачный ретранслятор (VTM), без прямого доступа к регистратору.
 
-Регистраторы из Hik-Connect обычно стоят в чужой сети: облако сообщает только их локальный
+Регистраторы из облака P2P обычно стоят в чужой сети: облако сообщает только их локальный
 адрес, и RTSP с этого компьютера недоступен. Мобильное приложение смотрит видео через
 облачный ретранслятор VTM. Его протокол (вход, токены VTDU, кадрирование VTM) реализован в
 открытых библиотеках pyezvizapi и hikcloudstream (Apache-2.0). Они живут в отдельном
@@ -35,7 +35,7 @@ STREAM_MAIN, STREAM_SUB = 1, 2
 
 ERROR_TITLES = {
     "runtime": "модуль облачного видео не установлен",
-    "session": "сессия Hik-Connect истекла: откройте «Hik-Connect» и войдите снова",
+    "session": "сессия облака P2P истекла: откройте «Облако P2P» и войдите снова",
     "not_found": "облако не нашло этот канал (камера не в сети или канал не подключён)",
     "negotiation": "облачный ретранслятор отказал в потоке",
     "encrypted": "видео на регистраторе зашифровано: нужен код проверки устройства",
@@ -130,11 +130,11 @@ def stream_kind(device) -> int:
 
 
 def build_request(device, session_state, validate_code="") -> dict:
-    """Задание помощнику: какой канал открыть и с какой сессией Hik-Connect."""
+    """Задание помощнику: какой канал открыть и с какой сессией облака P2P."""
     if not device.get("cloud_serial"):
-        raise ValueError("Устройство не из Hik-Connect")
+        raise ValueError("Устройство не из облака P2P")
     if not session_state or not session_state.get("session_id"):
-        raise CloudStreamError("session", "нет сессии Hik-Connect")
+        raise CloudStreamError("session", "нет сессии облака P2P")
     return {
         "api_url": session_state.get("api_url") or "https://api.hik-connect.com",
         "session_id": session_state["session_id"],

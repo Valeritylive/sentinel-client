@@ -251,7 +251,7 @@ def counters(day=None, now=None):
             "left_today": sum(1 for v in today if v["status"] == LEFT)}
 
 
-def badge_html(visitor, site_name="Sentinel"):
+def badge_html(visitor, site_name="Sentinel PRO"):
     """Пропуск посетителя для печати (HTML, A6)."""
     e = lambda value: html.escape(str(value or "—"))
     return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Пропуск {e(visitor['badge'])}</title>

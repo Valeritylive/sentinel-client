@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=Sentinel Server
-Comment=Sentinel server status icon in the system tray
-Comment[ru]=Значок состояния сервера Sentinel в трее
+Name=Sentinel PRO Server
+Comment=Sentinel PRO server status icon in the system tray
+Comment[ru]=Значок состояния сервера Sentinel PRO в трее
 Exec=/usr/bin/sentinel-server-tray --show
 Icon=io.sentinel.Server
 Terminal=false

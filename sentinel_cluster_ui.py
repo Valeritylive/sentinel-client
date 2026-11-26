@@ -165,7 +165,7 @@ def build_page(window):
             widget.set_sensitive(current is not None)
         if current is None:
             connection.set_text("Клиент не подключён к серверу Sentinel. Подключитесь: меню пользователя › "
-                                "«Сервер Sentinel…».")
+                                "«Сервер Sentinel PRO…».")
             status.set_text("")
             journal.set_text("")
             return

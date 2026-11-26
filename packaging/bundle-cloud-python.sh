@@ -1,5 +1,5 @@
 #!/bin/sh
-# Встраивает в AppImage отдельный Python 3.12 с библиотеками облачного видео Hik-Connect
+# Встраивает в AppImage отдельный Python 3.12 с библиотеками облачного видео P2P
 # (hikcloudstream и pyezvizapi требуют Python 3.12+, а AppImage собирается на Ubuntu 22.04 с Python 3.10).
 # Используется переносимая сборка python-build-standalone; помощник облачного потока запускается этим Python.
 set -eu

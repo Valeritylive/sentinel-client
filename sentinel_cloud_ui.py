@@ -1,6 +1,6 @@
-"""GTK-часть облака и сервера: вход в Hik-Connect и подключение клиента к Sentinel Server.
+"""GTK-часть облака и сервера: вход в облако P2P и подключение клиента к Sentinel PRO Server.
 
-* ``HikConnectPanel`` — способ добавления «Hik-Connect» в «Система › Управление устройствами ›
+* ``HikConnectPanel`` — способ добавления «Облако P2P» в «Система › Управление устройствами ›
   Добавить устройство»: вход в аккаунт, список привязанных устройств с состоянием и адресами,
   импорт выбранных в каталог. Если клиент подключён к серверу, все операции идут через сервер.
 * ``ServerLink`` / ``open_server_dialog`` — вход в Sentinel Server, загрузка его каталога в
@@ -82,7 +82,7 @@ def _run(owner, work, done, error_prefix):
     _start(worker)
 
 
-# ==================================================================== Hik-Connect
+# ==================================================================== облако P2P
 class HikConnectPanel(Gtk.Box):
     def __init__(self, owner):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -95,7 +95,7 @@ class HikConnectPanel(Gtk.Box):
         self.mode_label = W.label("", "muted", wrap=True)
         self.append(self.mode_label)
 
-        self.append(W.label("2. Аккаунт Hik-Connect", "section-title"))
+        self.append(W.label("2. Аккаунт облачного сервиса P2P", "section-title"))
         self.account_holder = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.account_picker = None
         self.append(_row(self.account_holder, _spacer(),
@@ -106,7 +106,7 @@ class HikConnectPanel(Gtk.Box):
         self.login_entry = _field(form, 0, "Логин (email или телефон)", Gtk.Entry())
         self.password_entry = _field(form, 1, "Пароль", Gtk.PasswordEntry(show_peek_icon=True))
         self.region = _field(form, 2, "Сервер", Gtk.DropDown.new_from_strings([t for _k, t, _u in hikconnect.REGIONS]))
-        self.custom_url = _field(form, 3, "Адрес сервера", Gtk.Entry(placeholder_text="https://api.hik-connect.com"))
+        self.custom_url = _field(form, 3, "Адрес сервера", Gtk.Entry(placeholder_text="https://…"))
         self.custom_url.set_sensitive(False)
         self.region.connect("notify::selected", lambda *_: self.custom_url.set_sensitive(
             self.region.get_selected() == len(hikconnect.REGIONS) - 1))
@@ -114,9 +114,9 @@ class HikConnectPanel(Gtk.Box):
         form.attach(self.remember, 1, 4, 1, 1)
         self.password_entry.connect("activate", lambda *_: self.login())
         self.append(form)
-        self.append(_row(W.button("Войти в Hik-Connect", self.login, "red-button"), _spacer()))
-        self.append(W.label("Пароль аккаунта отправляется в облако только как хеш (так же, как в приложении "
-                            "Hik-Connect). Сессия хранится в системном хранилище секретов.", "muted", wrap=True))
+        self.append(_row(W.button("Войти в облако P2P", self.login, "red-button"), _spacer()))
+        self.append(W.label("Пароль аккаунта отправляется в облако только как хеш (так же, как в мобильном "
+                            "приложении). Сессия хранится в системном хранилище секретов.", "muted", wrap=True))
 
         self.status = W.label("Войдите в аккаунт, чтобы увидеть привязанные устройства.", "muted", wrap=True)
         self.append(_row(W.label("3. Устройства аккаунта", "section-title"), _spacer(), self.status))
@@ -129,14 +129,14 @@ class HikConnectPanel(Gtk.Box):
         self.append(scroll)
 
         self.append(W.label("4. Добавление в каталог", "section-title"))
-        self.append(W.label("Видео через P2P-облако Hikvision передаётся по закрытому протоколу, поэтому Sentinel "
+        self.append(W.label("Видео через облако P2P передаётся по закрытому протоколу, поэтому Sentinel PRO "
                             "подключается к устройству напрямую по ISAPI/RTSP: укажите логин и пароль самого "
                             "устройства (не аккаунта) и способ доступа.", "muted", wrap=True))
         form = _form()
         self.device_user = _field(form, 0, "Пользователь устройства", Gtk.Entry(text="admin"))
         self.device_password = _field(form, 1, "Пароль устройства", Gtk.PasswordEntry(show_peek_icon=True))
         self.address = _field(form, 2, "Адрес подключения", Gtk.DropDown.new_from_strings([t for _k, t in ADDRESS_MODES]))
-        self.area = _field(form, 3, "Область", Gtk.Entry(text="Hik-Connect"))
+        self.area = _field(form, 3, "Область", Gtk.Entry(text="Облако P2P"))
         self.append(form)
         self.append(_row(_spacer(), W.button("Добавить выбранные", lambda: self.import_devices(False), "red-button"),
                          W.button("Добавить все в сети", lambda: self.import_devices(True))))
@@ -168,7 +168,7 @@ class HikConnectPanel(Gtk.Box):
                 devices = hikconnect.load_cloud_devices()
             return accounts, devices
 
-        _run(self.owner, work, self._loaded, "Hik-Connect")
+        _run(self.owner, work, self._loaded, "Облако P2P")
 
     def _loaded(self, result):
         if result is None:
@@ -237,7 +237,7 @@ class HikConnectPanel(Gtk.Box):
         account = self.login_entry.get_text().strip()
         password = self.password_entry.get_text()
         if not account or not password:
-            self.owner.notify("Введите логин и пароль Hik-Connect", error=True)
+            self.owner.notify("Введите логин и пароль облака P2P", error=True)
             return
         try:
             region, url = self._region()
@@ -247,7 +247,7 @@ class HikConnectPanel(Gtk.Box):
         remember = self.remember.get_active()
         link = self.link
         self.busy = True
-        self.status.set_text("Вход в Hik-Connect…")
+        self.status.set_text("Вход в облако P2P…")
 
         def work():
             if link:
@@ -262,17 +262,17 @@ class HikConnectPanel(Gtk.Box):
                 self.status.set_text("Вход не выполнен")
                 return
             self.password_entry.set_text("")
-            alarms.log_operation(self.owner.session.username, "Вход в Hik-Connect", account)
-            self.owner.notify(f"Hik-Connect: вход выполнен ({account})")
+            alarms.log_operation(self.owner.session.username, "Вход в облако P2P", account)
+            self.owner.notify(f"Облачный сервис: вход выполнен ({account})")
             self._focus_account = account
             self.refresh()
 
-        _run(self.owner, work, done, "Hik-Connect")
+        _run(self.owner, work, done, "Облако P2P")
 
     def sync(self):
         account = self._account()
         if account is None or self.busy:
-            self.owner.notify("Сначала войдите в аккаунт Hik-Connect")
+            self.owner.notify("Сначала войдите в аккаунт облака P2P")
             return
         password = self.password_entry.get_text() or None
         link = self.link
@@ -289,12 +289,12 @@ class HikConnectPanel(Gtk.Box):
         def done(result):
             self.busy = False
             if result is not None:
-                self.owner.notify(f"Hik-Connect: список устройств обновлён ({account['account']})")
+                self.owner.notify(f"Облачный сервис: список устройств обновлён ({account['account']})")
                 if not link:
                     self.owner.refresh()
             self.refresh()
 
-        _run(self.owner, work, done, "Hik-Connect")
+        _run(self.owner, work, done, "Облако P2P")
 
     def logout(self):
         account = self._account()
@@ -312,12 +312,12 @@ class HikConnectPanel(Gtk.Box):
 
             def done(result):
                 if result:
-                    self.owner.notify(f"Выход из Hik-Connect: {account['account']}. Добавленные в каталог "
+                    self.owner.notify(f"Выход из облака P2P: {account['account']}. Добавленные в каталог "
                                       "устройства сохранены.")
                     self.account_index = 0
                 self.refresh()
 
-            _run(self.owner, work, done, "Hik-Connect")
+            _run(self.owner, work, done, "Облако P2P")
 
         self.owner._confirm(f"Выйти из аккаунта {account['account']} и забыть его сессию?", confirmed, "Выйти")
 
@@ -364,22 +364,22 @@ class HikConnectPanel(Gtk.Box):
                 added, errors = result
                 owner.refresh()
                 owner.sync_event_subscriptions()
-                text = f"Добавлено из Hik-Connect: {added}"
+                text = f"Добавлено из облака P2P: {added}"
                 if errors:
                     text += ". " + "; ".join(errors[:3])
                 owner.notify(text, error=bool(errors))
-                alarms.log_operation(owner.session.username, "Импорт из Hik-Connect", ", ".join(serials),
+                alarms.log_operation(owner.session.username, "Импорт из облака P2P", ", ".join(serials),
                                      f"добавлено: {added}")
                 if not credentials and added:
                     owner.notify("Пароль устройства не задан: он будет запрошен при первом открытии камеры")
             self.refresh()
 
-        _run(owner, work, done, "Импорт Hik-Connect")
+        _run(owner, work, done, "Импорт облака P2P")
 
 
 # ==================================================================== Sentinel Server
 class ServerLink:
-    """Подключение клиента к Sentinel Server."""
+    """Подключение клиента к Sentinel PRO Server."""
 
     def __init__(self, owner):
         self.owner = owner
@@ -668,19 +668,19 @@ def restore_server_connection(owner):
                             settings.get("ca_file", ""), settings.get("listen", True), True)
 
     _run(owner, work, lambda summary: summary and owner.notify(
-        f"Подключено к серверу Sentinel {settings['url']}"), "Сервер Sentinel")
+        f"Подключено к серверу Sentinel PRO {settings['url']}"), "Сервер Sentinel PRO")
 
 
 def open_server_dialog(owner):
     link = server_link(owner)
     settings = link.settings()
-    dialog = Gtk.Dialog(title="Сервер Sentinel", transient_for=owner, modal=True)
+    dialog = Gtk.Dialog(title="Сервер Sentinel PRO", transient_for=owner, modal=True)
     dialog.set_default_size(560, -1)
     dialog.add_button("Закрыть", Gtk.ResponseType.CLOSE)
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
     W.margins(box, 16)
-    box.append(W.label("Подключение к серверной части Sentinel (sentinel-server): общий каталог устройств, "
-                       "пользователи, правила тревог и аккаунты Hik-Connect на сервере.", "muted", wrap=True))
+    box.append(W.label("Подключение к серверной части Sentinel PRO (sentinel-server): общий каталог устройств, "
+                       "пользователи, правила тревог и аккаунты облака P2P на сервере.", "muted", wrap=True))
     form = _form()
     url = _field(form, 0, "Адрес сервера", Gtk.Entry(text=settings.get("url") or "",
                                                        placeholder_text="http://127.0.0.1:8765 или https://сервер:8765"))
@@ -734,7 +734,7 @@ def open_server_dialog(owner):
         status.set_text("Подключение…")
         args = (url.get_text(), user.get_text().strip(), password.get_text(), verify.get_active(),
                 ca_file.get_text().strip(), listen.get_active(), auto.get_active(), backup.get_text().strip())
-        _run(owner, lambda: link.connect(*args), connected, "Сервер Sentinel")
+        _run(owner, lambda: link.connect(*args), connected, "Сервер Sentinel PRO")
 
     def pulled(result):
         pull_button.set_sensitive(True)
@@ -772,4 +772,4 @@ def update_user_menu(owner):
     if label is None:
         return
     link = owner.__dict__.get("server_link")
-    label.set_text(f"Сервер: {link.client.base_url}" if link and link.connected else "Локальный клиент Sentinel")
+    label.set_text(f"Сервер: {link.client.base_url}" if link and link.connected else "Локальный клиент Sentinel PRO")

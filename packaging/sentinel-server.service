@@ -1,5 +1,5 @@
 [Unit]
-Description=Sentinel Server (video surveillance management service)
+Description=Sentinel PRO Server (security management service)
 Documentation=file:///usr/share/doc/sentinel-server/README.md
 After=network-online.target
 Wants=network-online.target

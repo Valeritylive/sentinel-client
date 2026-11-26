@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Sentinel Server — серверная часть Sentinel (аналог службы HikCentral Lite / iVMS-4200 Service).
+"""Sentinel PRO Server — серверная часть Sentinel.
 
 Работает без графики (systemd-служба или консоль), хранит общий каталог устройств,
-пользователей, правила тревог и аккаунты Hik-Connect, постоянно держит подписки на
+пользователей, правила тревог и аккаунты облака P2P, постоянно держит подписки на
 события устройств и раздаёт всё клиентам через REST API и поток событий (SSE).
 
 Запуск::
@@ -748,7 +748,7 @@ def change_own_password(h, body):
     return {"ok": True}
 
 
-# ==================================================================== Hik-Connect
+# ==================================================================== облако P2P
 def _account_out(account, engine):
     item = {k: account[k] for k in ("id", "account", "api_url", "remember_password", "auto_sync", "last_sync",
                                     "last_error")}
@@ -784,7 +784,7 @@ def hikconnect_login(h, body):
         str(body.get("account", "")), str(body.get("password", "")), _region_url(body),
         bool(body.get("remember_password")), h.engine.hikconnect_factory)
     hikconnect.apply_cloud_status()
-    h.audit("Вход в Hik-Connect", body.get("account", ""), f"устройств: {len(devices)}")
+    h.audit("Вход в облако P2P", body.get("account", ""), f"устройств: {len(devices)}")
     h.engine.bus.publish("cloud_sync", {"accounts": {account_id: len(devices)}})
     return HTTPStatus.CREATED, {"account": _account_out(hikconnect.get_account(account_id), h.engine),
                                 "devices": hikconnect.load_cloud_devices(account_id)}
@@ -808,7 +808,7 @@ def hikconnect_logout(h, _body, account_id):
     if not account:
         raise ApiError(HTTPStatus.NOT_FOUND, "Аккаунт не найден")
     hikconnect.delete_account(account["id"])
-    h.audit("Выход из Hik-Connect", account["account"])
+    h.audit("Выход из облака P2P", account["account"])
     return {"ok": True}
 
 
@@ -836,11 +836,11 @@ def hikconnect_import(h, body):
     address = body.get("address", "auto")
     if address not in ("auto", "local", "wan"):
         raise ValueError("address: auto, local или wan")
-    added, errors = hikconnect.import_devices(serials, credentials, address, str(body.get("area", "Hik-Connect")),
+    added, errors = hikconnect.import_devices(serials, credentials, address, str(body.get("area", "Облако P2P")),
                                               account_id=body.get("account_id"))
     h.engine.forget_credentials()
     h.engine.sync_event_subscriptions()
-    h.audit("Импорт из Hik-Connect", ", ".join(serials), f"добавлено: {added}")
+    h.audit("Импорт из облака P2P", ", ".join(serials), f"добавлено: {added}")
     return {"added": added, "errors": errors}
 
 
@@ -943,7 +943,7 @@ def cmd_run(args):
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     scheme = "https" if tls else "http"
-    log.info("Sentinel Server %s: %s://%s:%s%s (данные: %s, секреты: %s)", VERSION, scheme, args.host, args.port,
+    log.info("Sentinel PRO Server %s: %s://%s:%s%s (данные: %s, секреты: %s)", VERSION, scheme, args.host, args.port,
              API, storage.DATA, storage.credential_backend())
     try:
         server.serve_forever(poll_interval=0.5)
@@ -1011,7 +1011,7 @@ def cmd_list_users(args):
 
 
 def cmd_hikconnect_login(args):
-    password = os.environ.get("HIKCONNECT_PASSWORD") or getpass.getpass("Пароль Hik-Connect: ")
+    password = os.environ.get("HIKCONNECT_PASSWORD") or getpass.getpass("Пароль облака P2P: ")
     url = _region_url({"region": args.region, "api_url": args.api_url})
     account_id, devices = hikconnect.login_account(args.account, password, url, args.remember)
     print(f"Аккаунт #{account_id}: устройств {len(devices)}")
@@ -1106,12 +1106,12 @@ def build_parser():
     users = sub.add_parser("list-users", parents=[common], help="показать пользователей сервера")
     users.add_argument("--json", action="store_true")
     hc_login = sub.add_parser("hikconnect-login", parents=[common],
-                              help="войти в аккаунт Hik-Connect и загрузить устройства")
+                              help="войти в аккаунт облака P2P и загрузить устройства")
     hc_login.add_argument("--account", required=True)
     hc_login.add_argument("--region", default="auto", choices=[k for k, _t, _u in hikconnect.REGIONS])
     hc_login.add_argument("--api-url")
     hc_login.add_argument("--remember", action="store_true", help="хранить пароль для автопродления")
-    sub.add_parser("hikconnect-devices", parents=[common], help="показать устройства аккаунтов Hik-Connect")
+    sub.add_parser("hikconnect-devices", parents=[common], help="показать устройства аккаунтов облака P2P")
     init = sub.add_parser("cluster-init", parents=[common], help="настроить горячий резерв (основной/резервный)")
     init.add_argument("--role", required=True, choices=(cluster.STANDALONE, cluster.PRIMARY, cluster.STANDBY))
     init.add_argument("--peer", help="адрес второго узла, например https://10.0.0.2:8765")

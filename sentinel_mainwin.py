@@ -1,4 +1,4 @@
-"""Главное окно в стиле HikCentral Lite (примесь к SentinelWindow).
+"""Главное окно (примесь к SentinelWindow).
 
   ┌ логотип │ вкладки видов … + │ Поиск  Система  ▦  ⤓  ?  admin▾  🔒 ┐
   │ левая панель │      видеосетка вида            │ правая панель     │
@@ -115,7 +115,7 @@ class MainWindowMixin:
         self.group_list = None
 
         workspace = self._overview_page()
-        # Вкладки разделов как в iVMS-4200: «Главная» с плитками разделов, «Главный просмотр»
+        # Вкладки разделов как в профессиональных VMS: «Главная» с плитками разделов, «Главный просмотр»
         # и «Удалённое воспроизведение» (одна видеосетка, разный режим) и страницы модулей.
         self.module_tabs = shell.TabModel()
         self.page_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
@@ -220,11 +220,11 @@ class MainWindowMixin:
         W.margins(box, 8)
         self.user_title = W.label("admin", "section-title")
         box.append(self.user_title)
-        self.user_mode_label = W.label("Локальный клиент Sentinel", "muted")
+        self.user_mode_label = W.label("Локальный клиент Sentinel PRO", "muted")
         box.append(self.user_mode_label)
         box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-        for title, callback in (("Сервер Sentinel…", self.open_server_dialog),
-                                ("Hik-Connect (облачный аккаунт)…", self.open_hikconnect),
+        for title, callback in (("Сервер Sentinel PRO…", self.open_server_dialog),
+                                ("Облачный сервис P2P…", self.open_hikconnect),
                                 ("Лицензии", self.show_license_info),
                                 ("Резервное копирование и восстановление", self.backup_restore_dialog),
                                 ("Локальная конфигурация", self.open_local_settings),
@@ -250,7 +250,7 @@ class MainWindowMixin:
         sections = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.resource_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         self.resource_list.set_margin_start(4)
-        self.resource_section = W.section("Sentinel", "⌂", self.resource_list, True,
+        self.resource_section = W.section("Sentinel PRO", "⌂", self.resource_list, True,
                                           (("ⓘ", "Условные обозначения", self.show_resource_legend),
                                            ("⋯", "Действия", self._resource_root_menu)))
         sections.append(self.resource_section)
@@ -487,7 +487,7 @@ class MainWindowMixin:
         return grid
 
     # ------------------------------------------------------------------ две видеосетки
-    # «Главный просмотр» и «Удалённое воспроизведение» — разные сетки, как в iVMS-4200:
+    # «Главный просмотр» и «Удалённое воспроизведение» — разные сетки, как в профессиональных VMS:
     # живые потоки продолжают идти, пока открыта вкладка воспроизведения, и наоборот.
     GRID_ATTRS = ("streams", "video_slots", "camera_grid", "layout_count", "grid_columns", "grid_rows",
                   "division", "cell_layout", "selected_slot", "maximized_slot", "slot_resources",
@@ -945,7 +945,7 @@ class MainWindowMixin:
     def _render_home(self):
         W.clear(self.home_box)
         W.margins(self.home_box, 24)
-        self.home_box.append(W.label("Панель управления", "home-title"))
+        self.home_box.append(W.label("Sentinel PRO — центр управления безопасностью", "home-title"))
         self.home_box.append(W.label("Выберите раздел — он откроется отдельной вкладкой.", "muted"))
         for section, items in shell.sections():
             allowed = [m for m in items if dash.module_allowed(self.session, m.key)]
@@ -1401,7 +1401,7 @@ class MainWindowMixin:
                 expander = Gtk.Expander()
                 head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
                 head.append(W.label(f"{icon} {member['name']}"))
-                # Точка у устройства — его доступность (для Hik-Connect — по облаку);
+                # Точка у устройства — его доступность (для облака P2P — по облаку);
                 # точки у каналов — открыта ли камера в текущем виде.
                 online = status == "online"
                 dot = W.label("●", "dev-online" if online else "cam-idle")
@@ -1417,7 +1417,7 @@ class MainWindowMixin:
                     mark.set_tooltip_text(f"Снято с охраны каналов: {len(disarmed)} из {len(channels)}")
                     head.append(mark)
                 if first.get("category") != "access":
-                    # Как в iVMS: ▶ рядом с названием и двойной щелчок — открыть все каналы устройства.
+                    # Как в профессиональных VMS: ▶ рядом с названием и двойной щелчок — открыть все каналы устройства.
                     play = W.button("▶", lambda c=channels: self.start_channels(c), flat=True,
                                     tooltip="Открыть все каналы устройства (или двойной щелчок по названию)")
                     play.add_css_class("tree-play")
@@ -2413,7 +2413,7 @@ class MainWindowMixin:
             hosts.setdefault((device["host"], device.get("http_port", 80)), device)
         choices = list(hosts.values())
         if not choices:
-            self.notify("Нет устройств Hikvision с тревожными выходами")
+            self.notify("Нет ISAPI-устройств с тревожными выходами")
             return
         dialog = Gtk.Dialog(title="Тревожный выход", transient_for=self, modal=True)
         dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
@@ -2620,12 +2620,13 @@ class MainWindowMixin:
 
     def show_about(self):
         from app import APP_VERSION
-        self.notify(f"Sentinel {APP_VERSION} — клиент видеонаблюдения для Linux в стиле HikCentral Lite / iVMS-4200.\n"
+        self.notify(f"Sentinel PRO {APP_VERSION} — универсальный центр управления безопасностью для Linux: "
+                    "видеонаблюдение, контроль доступа, тревоги и учёт посещений.\n"
                     "Клавиши: F11 — полный экран, Esc — закрыть окно модуля, Ctrl+T — новый вид, "
                     "Ctrl+S — сохранить вид, Ctrl+L — заблокировать, Пробел — пауза воспроизведения.")
 
     def show_license_info(self):
-        self.notify("Sentinel не требует лицензий: каналы, двери и ANPR не ограничены. "
+        self.notify("Sentinel PRO не требует лицензий: каналы, двери и ANPR не ограничены. "
                     "Возможности зависят только от моделей и прошивок устройств.")
 
     def backup_restore_dialog(self):
@@ -2698,7 +2699,7 @@ class MainWindowMixin:
         card.set_valign(Gtk.Align.CENTER)
         card.set_size_request(320, -1)
         card.append(W.label("⬢", "hcl-logo", 0.5))
-        card.append(W.label("Sentinel", "page-title", 0.5))
+        card.append(W.label("Sentinel PRO", "page-title", 0.5))
         subtitle = {"login": "Вход в клиент", "unlock": "Клиент заблокирован",
                     "setup": "Задайте пароль администратора (admin)"}[mode]
         card.append(W.label(subtitle, "muted", 0.5))

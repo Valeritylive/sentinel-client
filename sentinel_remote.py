@@ -1,4 +1,4 @@
-"""Клиент REST API Sentinel Server (без GTK): вход, устройства, Hik-Connect, поток событий."""
+"""Клиент REST API Sentinel PRO Server (без GTK): вход, устройства, облако P2P, поток событий."""
 from __future__ import annotations
 
 import http.client
@@ -16,7 +16,7 @@ API = "/api/v1"
 PLAIN_HTTP_SSL_REASONS = ("RECORD_LAYER_FAILURE", "WRONG_VERSION_NUMBER", "UNKNOWN_PROTOCOL", "HTTP_REQUEST",
                           "PACKET_LENGTH_TOO_LONG")
 PLAIN_HTTP_HINT = ("Сервер работает без шифрования (HTTP). Укажите адрес с http://, например "
-                   "http://127.0.0.1:8765 — точный адрес показан в «Настройках Sentinel Server».")
+                   "http://127.0.0.1:8765 — точный адрес показан в «Настройках Sentinel PRO Server».")
 
 
 class RemoteError(RuntimeError):
@@ -178,7 +178,7 @@ class ServerClient:
     def delete_view(self, view_id):
         return self.request("DELETE", f"/views/{int(view_id)}")
 
-    # ------------------------------------------------------------ Hik-Connect
+    # ------------------------------------------------------------ облако P2P
     def hikconnect_accounts(self):
         return self.request("GET", "/hikconnect/accounts")["items"]
 
@@ -195,7 +195,7 @@ class ServerClient:
     def hikconnect_devices(self, account_id=None):
         return self.request("GET", "/hikconnect/devices", params={"account_id": account_id})["items"]
 
-    def hikconnect_import(self, serials, username="", password="", address="auto", area="Hik-Connect",
+    def hikconnect_import(self, serials, username="", password="", address="auto", area="Облако P2P",
                           account_id=None):
         return self.request("POST", "/hikconnect/import", {"serials": list(serials), "username": username,
                                                            "password": password, "address": address,

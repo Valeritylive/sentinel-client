@@ -146,7 +146,7 @@ class RequestTests(unittest.TestCase):
 
     def test_packaging_pins_match_runtime(self):
         root = Path(__file__).resolve().parent.parent
-        for name in ("packaging/bundle-cloud-python.sh", "packaging/flatpak/io.sentinel.VideoClient.yml"):
+        for name in ("packaging/bundle-cloud-python.sh", "packaging/flatpak/io.sentinel.SentinelPro.yml"):
             text = (root / name).read_text(encoding="utf-8")
             for package in cs.RUNTIME_PACKAGES:
                 self.assertIn(package, text, name)
