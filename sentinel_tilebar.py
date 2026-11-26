@@ -150,12 +150,22 @@ class TileBarMixin:
         for key, on in active.items():
             if key in buttons:
                 (buttons[key].add_css_class if on else buttons[key].remove_css_class)("tile-tool-on")
+        session = self._tile_session()
+        allowed = {"clip": True, "talk": True, "ptz": session is None or session.can("ptz")}
         for key in ("clip", "talk", "ptz"):
             if key in buttons:
-                buttons[key].set_sensitive(live)
+                buttons[key].set_sensitive(live and allowed[key])
+        if not allowed["ptz"]:
+            self._tile_ptz_slots().discard(index)
         pad = slot.get("ptz_pad")
         if pad is not None:
             pad.set_visible(live and index in self._tile_ptz_slots())
+
+    def _tile_session(self):
+        session = self.__dict__.get("session")
+        if session is None:
+            session = getattr(getattr(self, "parent_window", None), "session", None)
+        return session
 
     # ------------------------------------------------------------ действия
     def _tile_tool(self, index, key):
@@ -190,6 +200,10 @@ class TileBarMixin:
         self._sync_tile_toolbar(index)
 
     def toggle_tile_ptz(self, index):
+        session = self._tile_session()
+        if session is not None and not session.can("ptz"):
+            self.notify("Нет прав на управление PTZ", error=True)
+            return
         slots = self._tile_ptz_slots()
         if index in slots:
             slots.discard(index)

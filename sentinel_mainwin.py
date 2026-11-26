@@ -20,6 +20,7 @@ from pathlib import Path
 from gi.repository import Gdk, GLib, GObject, Gtk
 
 import sentinel_alarms as alarms
+import sentinel_dashboard as dash
 import sentinel_devmgmt as devmgmt
 import sentinel_layouts as layouts
 import sentinel_people as people
@@ -39,9 +40,9 @@ MODULE_PAGES = {
     "events": "alarms", "alarms": "alarms",
     "emap": "emap", "access": "access",
     "summary": "dashboard", "dashboard": "dashboard", "logs": "dashboard",
-    "local_files": "local_files",
+    "local_files": "local_files", "board": "board",
 }
-PAGE_TITLES = {"archive": "Поиск записей", "alarms": "Центр событий", "emap": "Электронная карта",
+PAGE_TITLES = {"board": "Панель мониторинга", "archive": "Поиск записей", "alarms": "Центр событий", "emap": "Электронная карта",
                "access": "Контроль доступа", "dashboard": "Статистика", "local_files": "Локальные файлы"}
 SYSTEM_MODULES = {"devices": "devices", "event_config": "event", "storage": "config:storage",
                   "accounts": "accounts", "settings": "config"}
@@ -78,6 +79,7 @@ class MainWindowMixin:
         self.stack.add_named(self._access_page(), "access")
         self.stack.add_named(self._dashboard_page(), "dashboard")
         self.stack.add_named(self._local_files_page(), "local_files")
+        self.stack.add_named(self._board_page(), "board")
         self.stack.set_visible_child_name("overview")
         self.group_list = None
 
@@ -133,12 +135,14 @@ class MainWindowMixin:
         GLib.timeout_add(400, self._adaptive_tick)
         GLib.timeout_add(500, self._timeline_tick)
         self._new_view_tab()
+        self.apply_role()
+        if dash.start_on_dashboard():
+            GLib.idle_add(lambda: (self._show_module("board"), False)[1])
 
     def _build_header(self):
         header = Gtk.HeaderBar()
         header.set_show_title_buttons(True)
-        logo = W.label("⬢", "hcl-logo")
-        logo.set_tooltip_text("Sentinel")
+        logo = W.button("⬢", lambda: self._show_module("board"), "hcl-logo", "Панель мониторинга", flat=True)
         header.pack_start(logo)
         self.view_tab_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         header.pack_start(self.view_tab_box)
@@ -165,23 +169,6 @@ class MainWindowMixin:
             header.pack_end(widget)
         self.header = header
         return header
-
-    def _modules_popover(self, menu_button):
-        popover = Gtk.Popover()
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        W.margins(box, 6)
-        for title, key in (("Статистика и сводка", "summary"), ("Центр событий", "events"),
-                           ("Поиск записей", "playback"), ("Электронная карта", "emap"),
-                           ("Контроль доступа", "access"), ("Локальные файлы", "local_files")):
-            item = W.button(title, lambda k=key: (popover.popdown(), self._show_module(k)), flat=True)
-            box.append(item)
-        box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-        box.append(W.button("Окно просмотра на другом экране…",
-                            lambda: (popover.popdown(), self.open_view_window()), flat=True))
-        box.append(W.button("Настройка устройств…", lambda: (popover.popdown(), self.open_system("devices")),
-                            flat=True))
-        popover.set_child(box)
-        return popover
 
     def _user_popover(self):
         popover = Gtk.Popover()
@@ -224,14 +211,17 @@ class MainWindowMixin:
                                            ("⋯", "Действия", self._resource_root_menu)))
         sections.append(self.resource_section)
 
+        self.left_sections = {}
         self.left_maps = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
-        sections.append(W.section("Карта", "⌖", self.left_maps, False,
-                                  (("＋", "Добавить карту", self.add_map),)))
+        self.left_sections["maps"] = W.section("Карта", "⌖", self.left_maps, False,
+                                               (("＋", "Добавить карту", self.add_map),))
+        sections.append(self.left_sections["maps"])
         stats = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         stats.append(W.button("◈ Сводка", lambda: self.open_report(None), "tree-row"))
         for key, title in reports.REPORTS.items():
             stats.append(W.button("▤ " + title, lambda k=key: self.open_report(k), "tree-row"))
-        sections.append(W.section("Статистика", "▤", stats))
+        self.left_sections["stats"] = W.section("Статистика", "▤", stats)
+        sections.append(self.left_sections["stats"])
         self.left_web = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         sections.append(W.section("Веб-страница", "◍", self.left_web, False,
                                   (("＋", "Добавить веб-страницу", self.add_web_page_dialog),)))
@@ -239,11 +229,13 @@ class MainWindowMixin:
         for title, kind in (("Снимки", "captures"), ("Видеозаписи и экспорт", "records"),
                             ("Резервное хранилище", "storage")):
             files.append(W.button("▸ " + title, lambda k=kind: self.open_local_files(k), "tree-row"))
-        sections.append(W.section("Локальные файлы", "▢", files))
+        self.left_sections["files"] = W.section("Локальные файлы", "▢", files)
+        sections.append(self.left_sections["files"])
         self.custom_view_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         sections.append(W.section("Вид", "▦", self.custom_view_list, False,
                                   (("＋", "Новая группа видов", self.add_view_group_dialog),)))
-        sections.append(W.section("PTZ", "✥", self._ptz_panel()))
+        self.left_sections["ptz"] = W.section("PTZ", "✥", self._ptz_panel())
+        sections.append(self.left_sections["ptz"])
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -694,6 +686,9 @@ class MainWindowMixin:
 
     # ================================================================== модули
     def _show_module(self, key):
+        if not dash.module_allowed(self.session, key):
+            self.notify("Нет прав на этот раздел", error=True)
+            return
         if key in SYSTEM_MODULES:
             section, _, sub = SYSTEM_MODULES[key].partition(":")
             self.open_system(section, sub or None)
@@ -717,6 +712,8 @@ class MainWindowMixin:
             self._render_event_center()
         elif page == "local_files":
             self._render_local_files()
+        elif page == "board":
+            self._render_board()
 
     def _activate_tab(self, key):  # совместимость со старым API вкладок модулей
         self._show_module(key)
@@ -2301,6 +2298,7 @@ class MainWindowMixin:
         self.user_title.set_text(f"{session.username} · {session.role}")
         self.header_buttons["system"].set_sensitive(any(session.can(p) for p in
                                                         ("devices", "persons", "access", "alarms", "users", "system")))
+        self.apply_role()
         if session.username != previous:
             alarms.log_operation(session.username, "Вход в клиент")
         if session.password_expires_in is not None:

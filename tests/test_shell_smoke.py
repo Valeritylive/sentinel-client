@@ -257,3 +257,26 @@ class TileToolbarSmoke(ShellSmoke):
         self.assertEqual(sent[2], (0, (0.25, 0.25), (0.75, 0.75)))
         self.win.toggle_tile_ptz(0)
         self.assertNotIn(0, self.win.tile_ptz)
+
+
+class RoleSmoke(ShellSmoke):
+    def test_board_opens_and_renders_default_widgets(self):
+        self.win._show_module("board")
+        self.assertEqual(self.win.stack.get_visible_child_name(), "board")
+        self.assertEqual(len(self.win.board_flow._state["children"]), 6)
+
+    def test_operator_menu_and_sections_follow_role(self):
+        import sentinel_security as security
+        operator = security.Session(2, "op", "Оператор", frozenset(security.BUILTIN_ROLES["Оператор"]), None)
+        self.win.session = operator
+        self.win.apply_role()
+        titles = [b.get_label() for b in self.win.modules_menu_box._state["children"] if hasattr(b, "get_label")]
+        self.assertIn("Поиск записей", titles)
+        self.assertNotIn("Настройка устройств…", titles)
+        no_maps = security.Session(3, "hr", "Кадры", frozenset({"persons"}), None)
+        self.win.session = no_maps
+        self.win.apply_role()
+        self.assertFalse(self.win.left_sections["maps"].get_visible())
+        self.assertFalse(self.win.left_sections["ptz"].get_visible())
+        self.win._show_module("emap")
+        self.assertNotEqual(self.win.stack.get_visible_child_name(), "emap")

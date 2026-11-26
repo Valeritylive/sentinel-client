@@ -53,6 +53,8 @@ expander title { padding: 6px 4px; }
 .camera-tile { background: #26272b; border: 1px solid #141517; border-radius: 0; }
 .camera-tile:hover { border-color: #55565c; }
 .camera-tile.selected { border: 2px solid #e8232c; }
+.board-card { background: #232428; border: 1px solid #2f3035; border-radius: 6px; padding: 12px; }
+.board-card button, .board-card button label { color: #cfd3da; }
 .tile-toolbar { background: alpha(#000, 0.6); border-radius: 4px; padding: 1px; }
 .tile-tool { color: #e6e6e6; min-width: 24px; min-height: 22px; padding: 1px 4px; font-size: 11px; }
 .tile-tool:hover { background: alpha(#fff, 0.14); }

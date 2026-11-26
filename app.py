@@ -52,6 +52,7 @@ import sentinel_widgets as W
 from sentinel_mainwin import MainWindowMixin
 from sentinel_services import ServicesMixin
 from sentinel_tilebar import TileBarMixin
+from sentinel_board import BoardMixin
 import sentinel_layouts as layouts
 import sentinel_protocols as protocols
 import sentinel_shell as shell
@@ -111,7 +112,7 @@ def make_label(text: str, css_class: str | None = None):
     return label
 
 
-class SentinelWindow(MainWindowMixin, ServicesMixin, TileBarMixin, Gtk.ApplicationWindow):
+class SentinelWindow(BoardMixin, MainWindowMixin, ServicesMixin, TileBarMixin, Gtk.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Sentinel — видеонаблюдение")
         self.set_resizable(True)
