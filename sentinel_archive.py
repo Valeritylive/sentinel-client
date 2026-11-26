@@ -15,7 +15,7 @@ import re
 import uuid
 import xml.etree.ElementTree as ET
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 
 RECORD_TYPES = {"all": "Все типы", "continuous": "Непрерывная", "motion": "Движение",
@@ -51,14 +51,88 @@ def record_kind(descriptor):
     return "smart"
 
 
+# ---------------------------------------------------------------- часы регистратора
+class DeviceClock:
+    """Как регистратор понимает время в ISAPI-поиске и в RTSP starttime/endtime.
+
+    Большинство NVR Hikvision (timeType=local) пишут и читают *местное* время
+    регистратора с буквой «Z» (20261126T090013Z = 09:00:13 по часам NVR), смещение
+    в запросе игнорируют. Если отправить настоящий UTC, архив уезжает на величину
+    часового пояса. Новые прошивки с timeType=UTC понимают «Z» как настоящий UTC.
+    """
+
+    def __init__(self, tz: tzinfo | None = None, utc: bool = False):
+        self.tz = tz or datetime.now().astimezone().tzinfo
+        self.utc = bool(utc)
+
+    def __repr__(self):
+        return f"DeviceClock(tz={self.tz!r}, utc={self.utc})"
+
+    def _wall(self, moment):
+        """aware datetime -> время на часах регистратора (без зоны)."""
+        if moment.tzinfo is None:
+            moment = moment.astimezone()
+        target = timezone.utc if self.utc else self.tz
+        return moment.astimezone(target).replace(tzinfo=None)
+
+    def rtsp(self, moment):
+        """Значение starttime/endtime для /Streaming/tracks."""
+        return self._wall(moment).strftime("%Y%m%dT%H%M%SZ")
+
+    def iso(self, moment):
+        """Время для startTime/endTime в CMSearchDescription."""
+        return self._wall(moment).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def parse(self, text):
+        """Время из ответа регистратора -> aware datetime в зоне компьютера."""
+        text = text.strip()
+        zulu = text.endswith(("Z", "z"))
+        value = datetime.fromisoformat(text[:-1] if zulu else text)
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc if (zulu and self.utc) else self.tz)
+        return value.astimezone()
+
+
+def parse_device_clock(payload):
+    """Ответ GET /ISAPI/System/time -> DeviceClock (зона из localTime, timeType)."""
+    tz = None
+    for node in ET.fromstring(payload).iter():
+        tag, text = _local(node.tag), (node.text or "").strip()
+        if tag == "localTime" and text:
+            try:
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if parsed.tzinfo is not None:
+                tz = timezone(parsed.utcoffset())
+    mode = parse_time_type(payload)
+    return DeviceClock(tz, bool(mode))
+
+
+def parse_time_type(payload):
+    """timeType из /ISAPI/System/time(/capabilities): True — UTC, False — local, None — нет поля."""
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError:
+        return None
+    for node in root.iter():
+        if _local(node.tag) == "timeType":
+            text = (node.text or "").strip().upper()
+            if text in ("UTC", "LOCAL"):
+                return text == "UTC"
+    return None
+
+
 def track_id(channel, stream=1):
     return int(channel) * 100 + int(stream)
 
 
-def search_query(track, start, end, position=0, record_type="all", max_results=50, search_id=None):
+def search_query(track, start, end, position=0, record_type="all", max_results=50, search_id=None, clock=None):
     """XML для POST /ISAPI/ContentMgmt/search (время — ISO-строки или datetime)."""
+    clock = clock or DeviceClock()
+
     def iso(value):
-        return value.astimezone().isoformat(timespec="seconds") if isinstance(value, datetime) else str(value)
+        return clock.iso(value) if isinstance(value, datetime) else str(value)
     metadata = ""
     descriptor = SEARCH_DESCRIPTORS.get(record_type)
     if descriptor:
@@ -71,12 +145,9 @@ def search_query(track, start, end, position=0, record_type="all", max_results=5
             "</CMSearchDescription>").encode()
 
 
-def _parse_time(text):
-    return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone()
-
-
-def parse_search_response(payload):
+def parse_search_response(payload, clock=None):
     """(записи [{start, end, uri, kind}], есть_ещё, найдено_в_ответе)."""
+    clock = clock or DeviceClock()
     root = ET.fromstring(payload)
     status = ""
     items = []
@@ -97,7 +168,7 @@ def parse_search_response(payload):
             elif child.text and name not in fields:
                 fields[name] = child.text.strip()
         try:
-            start, end = _parse_time(fields["startTime"]), _parse_time(fields["endTime"])
+            start, end = clock.parse(fields["startTime"]), clock.parse(fields["endTime"])
         except (KeyError, ValueError):
             continue
         if end <= start:
@@ -107,13 +178,13 @@ def parse_search_response(payload):
     return items, status == "MORE", count
 
 
-def search_all(post, track, start, end, record_type="all", max_pages=10, page_size=50):
+def search_all(post, track, start, end, record_type="all", max_pages=10, page_size=50, clock=None):
     """Постраничный поиск; post(xml_bytes) -> bytes ответа."""
     search_id = str(uuid.uuid4())
     result, position = [], 0
     for _page in range(max_pages):
         items, more, count = parse_search_response(
-            post(search_query(track, start, end, position, record_type, page_size, search_id)))
+            post(search_query(track, start, end, position, record_type, page_size, search_id, clock)), clock)
         result.extend(items)
         position += count
         if not more or not count:

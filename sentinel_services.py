@@ -340,8 +340,35 @@ class ServicesMixin:
             GLib.idle_add(self.notify, f"{device['host']}: {exc}", True)
 
     # ================================================================== поиск записей NVR
+    def device_clock(self, device, credentials=None):
+        """Часы регистратора (зона и timeType) для пересчёта времени архива.
+
+        С учётными данными один раз спрашивает /ISAPI/System/time (вызывать из фонового
+        потока); без них или при ошибке — местное время компьютера, как у NVR с timeType=local.
+        """
+        clocks = self.__dict__.setdefault("device_clocks", {})
+        key = (device.get("host"), int(device.get("http_port") or 80))
+        clock = clocks.get(key)
+        if clock is not None or not credentials or not credentials.get("username"):
+            return clock or archive.DeviceClock()
+        try:
+            payload = self._isapi_request(device, credentials, "/ISAPI/System/time")
+            clock = archive.parse_device_clock(payload)
+            if archive.parse_time_type(payload) is None:
+                try:
+                    mode = archive.parse_time_type(
+                        self._isapi_request(device, credentials, "/ISAPI/System/time/capabilities"))
+                except Exception:
+                    mode = None
+                clock.utc = bool(mode)
+        except Exception:
+            return archive.DeviceClock()
+        clocks[key] = clock
+        return clock
+
     def isapi_search_recordings(self, device, credentials, start, end, max_pages=10, record_type="all"):
         """[(начало, конец, playbackURI, тип записи)] за интервал (с постраничной выдачей)."""
+        clock = self.device_clock(device, credentials)
         url = f"http://{device['host']}:{device.get('http_port', 80)}/ISAPI/ContentMgmt/search"
         opener = authenticated_opener(url, credentials["username"], credentials.get("password", ""))
 
@@ -349,7 +376,8 @@ class ServicesMixin:
             request = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "application/xml"})
             with opener.open(request, timeout=12) as response:
                 return response.read()
-        items = archive.search_all(post, archive.track_id(device["channel"]), start, end, record_type, max_pages)
+        items = archive.search_all(post, archive.track_id(device["channel"]), start, end, record_type, max_pages,
+                                   clock=clock)
         return [(i["start"], i["end"], i["uri"], i["kind"]) for i in items]
 
     # ================================================================== резервная запись

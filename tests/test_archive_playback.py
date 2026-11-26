@@ -116,3 +116,18 @@ class StartPreviewTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ArchiveTimeTests(StartPreviewTests):
+    def test_archive_url_uses_nvr_wall_clock(self):
+        import sentinel_archive as archive
+        from datetime import timedelta, timezone
+        plus4 = timezone(timedelta(hours=4))
+        self.win.device_clocks = {(DEVICE["host"], DEVICE["http_port"]): archive.DeviceClock(plus4)}
+        from datetime import datetime
+        start = datetime(2026, 11, 26, 9, 0, 13, tzinfo=plus4).astimezone()
+        end = start + timedelta(minutes=10)
+        player = self._start({"playbin3", "playbin", "appsink"},
+                             playback=(start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")))
+        self.assertIn("starttime=20261126T090013Z", player.props["uri"])
+        self.assertIn("endtime=20261126T091013Z", player.props["uri"])

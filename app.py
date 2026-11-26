@@ -2250,10 +2250,13 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         if device["protocol"] == "hikvision":
             stream_num = int(device["channel"]) * 100 + layouts.STREAM_SUFFIX.get(device["stream"], 1)
             if playback:
-                start = self._utc_timestamp(playback[0])
-                end = self._utc_timestamp(playback[1])
-                if end <= start:
+                # Время в часах регистратора: NVR с timeType=local понимает «Z» как своё местное время.
+                clock = self.device_clock(device)
+                start_moment = datetime.fromisoformat(playback[0]).astimezone()
+                end_moment = datetime.fromisoformat(playback[1]).astimezone()
+                if end_moment <= start_moment:
                     raise ValueError("Время окончания должно быть позже начала")
+                start, end = clock.rtsp(start_moment), clock.rtsp(end_moment)
                 path = f"Streaming/tracks/{stream_num}?" + urllib.parse.urlencode({"starttime": start, "endtime": end})
             else:
                 path = f"Streaming/Channels/{stream_num}"
