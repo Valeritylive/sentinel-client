@@ -6,9 +6,8 @@ SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 VERSION=$(cat "$SOURCE_DIR/VERSION")
 PACKAGE_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/sentinel-server-deb.XXXXXX")
 OUTPUT=${1:-"$SOURCE_DIR/sentinel-pro-server_${VERSION}_all.deb"}
-MODULES="sentinel_server sentinel_engine sentinel_storage sentinel_alarms sentinel_hikconnect sentinel_security
-sentinel_protocols sentinel_people sentinel_recording sentinel_layouts sentinel_devmgmt sentinel_remote
-sentinel_server_ctl sentinel_server_settings sentinel_server_tray sentinel_widgets sentinel_timeline"
+# Все модули, которые сервер импортирует (транзитивно), — список строится автоматически.
+MODULES=$(python3 "$SOURCE_DIR/packaging/server-modules.py" "$SOURCE_DIR")
 
 cleanup() {
     rm -rf "$PACKAGE_ROOT"
@@ -33,6 +32,13 @@ mkdir -p \
 
 for module in $MODULES; do
     install -m 0644 "$SOURCE_DIR/$module.py" "$PACKAGE_ROOT/usr/lib/sentinel-server/$module.py"
+done
+# Проверка: каждый модуль сервера импортируется из собранного пакета
+for module in $MODULES; do
+    [ "$module" = sentinel_server_helper ] && continue
+    case "$module" in sentinel_server_settings|sentinel_server_tray|sentinel_widgets|sentinel_timeline) continue ;; esac
+    (cd / && python3 -I -c "import sys; sys.path.insert(0, '$PACKAGE_ROOT/usr/lib/sentinel-server'); import $module") \
+        || { echo "Ошибка: модуль $module не импортируется из пакета" >&2; exit 1; }
 done
 install -m 0644 "$SOURCE_DIR/VERSION" "$PACKAGE_ROOT/usr/lib/sentinel-server/VERSION"
 install -m 0644 "$SOURCE_DIR/packaging/sentinel-server.service" "$PACKAGE_ROOT/lib/systemd/system/sentinel-server.service"
