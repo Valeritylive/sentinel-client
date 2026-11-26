@@ -963,9 +963,11 @@ class MainWindowMixin:
                 tile = Gtk.Button()
                 tile.add_css_class("home-tile")
                 tile.set_halign(Gtk.Align.START)
+                tile.set_overflow(Gtk.Overflow.HIDDEN)     # картинка скругляется вместе с плиткой
                 body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
                 art = Gtk.Box()
                 art.add_css_class("home-art")
+                art.set_overflow(Gtk.Overflow.HIDDEN)
                 art.append(self._module_picture(item))
                 body.append(art)
                 caption = W.label(item.title, "home-tile-title", xalign=0.5, wrap=True)
