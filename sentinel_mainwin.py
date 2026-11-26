@@ -1048,7 +1048,8 @@ class MainWindowMixin:
         if not hasattr(self, "resource_list"):
             return
         W.clear(self.resource_list)
-        self.active_markers = []   # (label, {device_id, ...}) — кружки в дереве ресурсов
+        self.active_markers = []   # (label, {device_id, ...}) — кружки каналов: открыты в текущем виде
+        self.device_dots = {}      # frozenset(id каналов) → кружок устройства: доступно ли оно
         query = self.camera_search.get_text().strip().casefold()
         devices = [d for d in self.devices
                    if (not self.hide_offline or d.get("status") != "offline")
@@ -1090,11 +1091,14 @@ class MainWindowMixin:
                 expander = Gtk.Expander()
                 head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
                 head.append(W.label(f"{icon} {member['name']}"))
-                if first.get("category") != "access":
-                    dot = W.label("●", "cam-idle")
-                    dot.set_tooltip_text("Зелёный — камеры устройства открыты в текущем виде")
-                    head.append(dot)
-                    self.active_markers.append((dot, set(member["ids"])))
+                # Точка у устройства — его доступность (для Hik-Connect — по облаку);
+                # точки у каналов — открыта ли камера в текущем виде.
+                online = status == "online"
+                dot = W.label("●", "dev-online" if online else "cam-idle")
+                dot.set_tooltip_text("В сети" if online else ("Не в сети" if status == "offline"
+                                                               else "Состояние ещё не проверено"))
+                head.append(dot)
+                self.device_dots[frozenset(member["ids"])] = dot
                 if status == "offline":
                     head.append(W.label("не в сети", "muted"))
                 disarmed = [c for c in channels if not arming.effective(c, arming_states)]

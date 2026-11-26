@@ -139,15 +139,28 @@ class ResourceSmoke(ShellSmoke):
         first, second = self.win.devices
         markers = {frozenset(ids): label for label, ids in self.win.active_markers}
         cam1, cam2 = markers[frozenset({first["id"]})], markers[frozenset({second["id"]})]
-        nvr = markers[frozenset({first["id"], second["id"]})]
+        self.assertNotIn(frozenset({first["id"], second["id"]}), markers)   # у регистратора — доступность
         self.assertTrue(cam1.has_css_class("cam-idle"))
         self.win.streams[0] = {"base_device": first}
         self.win._update_active_markers()
-        self.assertTrue(cam1.has_css_class("cam-active") and nvr.has_css_class("cam-active"))
+        self.assertTrue(cam1.has_css_class("cam-active"))
         self.assertTrue(cam2.has_css_class("cam-idle"))
         self.win.streams.clear()
         self.win._update_active_markers()
         self.assertTrue(cam1.has_css_class("cam-idle") and not cam1.has_css_class("cam-active"))
+
+    def test_device_dot_shows_reachability(self):
+        self._add("10.0.0.1", [1, 2], "NVR")
+        key = frozenset(d["id"] for d in self.win.devices)
+        self.assertTrue(self.win.device_dots[key].has_css_class("cam-idle"))
+        with app_module.database() as db:
+            db.execute("UPDATE devices SET status='online'")
+        self.win.refresh()
+        dot = self.win.device_dots[key]
+        self.assertTrue(dot.has_css_class("dev-online"))
+        self.win.streams[0] = {"base_device": self.win.devices[0]}
+        self.win._update_active_markers()
+        self.assertTrue(dot.has_css_class("dev-online") and not dot.has_css_class("cam-active"))
 
     def test_store_probed_access_device(self):
         device = {"name": "Панель", "host": "10.0.0.5", "sdk_port": 8000, "http_port": 80, "rtsp_port": 554,
