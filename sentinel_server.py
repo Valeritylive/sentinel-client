@@ -24,6 +24,7 @@ import os
 import re
 import secrets
 import signal
+import socket
 import sqlite3
 import ssl
 import sys
@@ -126,6 +127,8 @@ class SentinelServer(ThreadingHTTPServer):
         super().__init__(address, RequestHandler)
         self.engine = engine
         self.cluster = None        # ClusterNode при работе в паре основной/резервный
+        self.new_engine = None     # фабрика Engine для смены роли на ходу
+        self.cluster_transport = None   # подмена транспорта между узлами (тесты)
         self.tokens = tokens or TokenStore()
         self.stopping = threading.Event()
         if tls_context is not None:
@@ -372,6 +375,30 @@ def cluster_failback(h, _body):
         raise ApiError(HTTPStatus.CONFLICT, str(exc)) from exc
     h.audit("Кластер: роль возвращена основному узлу")
     return {"ok": True}
+
+
+@route("GET", "/cluster/config", "system")
+def cluster_config_get(h, _body):
+    config = h.server.cluster.config if h.server.cluster else cluster.load_config()
+    return {**config, "hostname": socket.gethostname()}
+
+
+@route("PUT", "/cluster/config", "system")
+def cluster_config_put(h, body):
+    """Сменить роль и параметры узла из интерфейса — без перезапуска службы."""
+    current = h.server.cluster.config if h.server.cluster else cluster.load_config()
+    config = dict(current)
+    config.update({k: v for k, v in (body or {}).items() if k in cluster.DEFAULTS})
+    if config["role"] != cluster.STANDALONE and not str(config.get("key") or "").strip():
+        config["key"] = cluster.new_key()
+    try:
+        cluster.validate(config)
+    except cluster.ClusterError as exc:
+        raise ApiError(HTTPStatus.BAD_REQUEST, str(exc)) from exc
+    h.audit("Кластер: изменены настройки узла", config["role"], config.get("peer_url") or "")
+    node = reconfigure_cluster(h.server, config)
+    return {"config": {**(node.config if node else cluster.load_config())},
+            "status": node.status() if node else {"role": cluster.STANDALONE, "active": True}}
 
 
 @route("POST", "/auth/login", auth=False)
@@ -850,11 +877,34 @@ def attach_cluster(server, config, new_engine, transport=None, background=True):
         server.tokens = TokenStore()       # клиенты перейдут на активный узел
         log.warning("Кластер: узел в режиме ожидания, службы остановлены")
 
+    server.new_engine = new_engine
     node = cluster.ClusterNode(config, transport or cluster.http_transport(cluster.validate(config)), activate,
                                deactivate)
     server.cluster = node
     node.start(background)
     log.info("Кластер: роль %s, узел %s, второй узел %s", node.role, node.config["node"], node.config["peer_url"])
+    return node
+
+
+def reconfigure_cluster(server, config):
+    """Сохранить настройки кластера и сразу перейти в новую роль."""
+    config = cluster.save_config(config)
+    factory = server.new_engine or (lambda: engine_mod.Engine())
+    if server.cluster is not None:
+        server.cluster.stop()
+        server.cluster = None
+    if config["role"] == cluster.STANDALONE:
+        if not server.engine._threads:
+            server.engine = factory()
+            server.engine.start()
+        log.warning("Кластер: узел работает без резерва")
+        return None
+    node = attach_cluster(server, config, factory, transport=server.cluster_transport)
+    if not node.active and server.engine._threads:
+        old = server.engine                 # узел в ожидании: службы остановить, клиенты уйдут на активный
+        server.engine = factory()
+        old.stop()
+        server.tokens = TokenStore()
     return node
 
 
@@ -880,6 +930,7 @@ def cmd_run(args):
 
     engine = new_engine()
     server = make_server(args.host, args.port, engine, tls)
+    server.new_engine = new_engine
     config = cluster.load_config()
     if config["role"] == cluster.STANDALONE:
         engine.start()

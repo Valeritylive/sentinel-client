@@ -1694,7 +1694,8 @@ class SystemWindow(Gtk.Window):
                                     ("retention", "Срок хранения данных", self._retention_config),
                                     ("holiday", "Праздники", self._holiday_config),
                                     ("network", "Время и сеть", self._network_config),
-                                    ("capability", "Возможности сервиса", self._capability_config)):
+                                    ("capability", "Возможности сервиса", self._capability_config),
+                                    ("cluster", "Кластер серверов", self._cluster_config)):
             button = Gtk.ToggleButton(label=title)
             if first:
                 button.set_group(first)
@@ -1708,6 +1709,10 @@ class SystemWindow(Gtk.Window):
         page.append(nav)
         page.append(stack)
         return page
+
+    def _cluster_config(self):
+        import sentinel_cluster_ui
+        return sentinel_cluster_ui.build_page(self)
 
     def _email_config(self):
         config = storage.get_json_setting("smtp", dict(alarms.DEFAULT_SMTP))

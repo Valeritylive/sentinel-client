@@ -284,7 +284,8 @@ class ClusterNode:
             self.peer_error = str(exc) or exc.__class__.__name__
             return None
         if status != 200 or not isinstance(payload, dict):
-            self.peer_error = f"HTTP {status}"
+            self.peer_error = {403: "ключи узлов не совпадают (HTTP 403)",
+                               404: "второй сервер ещё не настроен для пары (HTTP 404)"}.get(status, f"HTTP {status}")
             return None
         self.peer, self.peer_ok_at, self.peer_error = payload, self.clock(), ""
         return payload

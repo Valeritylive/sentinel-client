@@ -697,6 +697,9 @@ def open_server_dialog(owner):
     pull_button.set_sensitive(link.connected)
     disconnect_button.set_sensitive(link.connected)
     box.append(_row(connect_button, pull_button, _spacer(), disconnect_button))
+    cluster_button = W.button("Кластер серверов…", lambda: (dialog.close(), owner.open_system("config", "cluster")),
+                              tooltip="Горячий резерв: роль сервера, второй узел, переключения")
+    box.append(_row(cluster_button))
 
     def connected(summary):
         connect_button.set_sensitive(True)

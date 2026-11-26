@@ -233,6 +233,35 @@ class ServerCluster(_Db):
         self.assertEqual(status, 200)
         self.assertFalse(self.node.active)
 
+    def test_reconfigure_from_api(self):
+        client = remote.ServerClient(self.url)
+        client.login("admin", "Adm1n-pass!")
+        self.node.promote()
+        self.server.cluster_transport = self.peer
+        config = client.request("GET", "/cluster/config")
+        self.assertEqual(config["role"], "standby")
+        # стать одиночным: службы работают, кластер отключён
+        result = client.request("PUT", "/cluster/config", {"role": "standalone"})
+        self.assertEqual(result["status"]["role"], "standalone")
+        self.assertIsNone(self.server.cluster)
+        self.assertTrue(self.server.engine._threads)
+        self.assertEqual(cluster.load_config()["role"], "standalone")
+        # основной без ключа: ключ создаётся сервером
+        result = client.request("PUT", "/cluster/config", {"role": "primary", "peer_url": "https://10.0.0.2:8765",
+                                                          "key": "", "failover": 40})
+        self.assertEqual(len(result["config"]["key"]), 64)
+        self.assertTrue(self.server.cluster.active and self.server.engine._threads)
+        with self.assertRaises(remote.RemoteError) as caught:
+            client.request("PUT", "/cluster/config", {"role": "standby", "peer_url": ""})
+        self.assertEqual(caught.exception.status, 400)
+        # в резерв: службы остановлены, сессии сброшены
+        client.request("PUT", "/cluster/config", {"role": "standby"})
+        self.assertFalse(self.server.cluster.active)
+        self.assertFalse(self.server.engine._threads)
+        with self.assertRaises(remote.RemoteError) as caught:
+            client.request("GET", "/cluster/status")
+        self.assertEqual(caught.exception.status, 401)
+
 
 if __name__ == "__main__":
     unittest.main()
