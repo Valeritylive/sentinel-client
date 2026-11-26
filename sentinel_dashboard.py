@@ -44,6 +44,8 @@ MODULE_PERMISSIONS = {
     "events": ("alarm_ack", "alarms"), "alarms": ("alarm_ack", "alarms"),
     "emap": ("maps",),
     "access": ("access",),
+    "parking": ("persons", "access"), "wall": ("live",), "patrol": ("alarms", "access"),
+    "evidence": ("playback",),
     "summary": ("reports",), "dashboard": ("reports",), "logs": ("reports",),
     "local_files": ("live", "playback"),
     "devices": ("devices",), "event_config": ("alarms",), "storage": ("system",),

@@ -43,9 +43,11 @@ MODULE_PAGES = {
     "emap": "emap", "access": "access",
     "summary": "dashboard", "dashboard": "dashboard", "logs": "dashboard",
     "local_files": "local_files", "board": "board",
+    "parking": "parking", "wall": "wall", "patrol": "patrol", "evidence": "evidence",
 }
 PAGE_TITLES = {"board": "Панель мониторинга", "archive": "Поиск записей", "alarms": "Центр событий", "emap": "Электронная карта",
-               "access": "Контроль доступа", "dashboard": "Статистика", "local_files": "Локальные файлы"}
+               "access": "Контроль доступа", "dashboard": "Статистика", "local_files": "Локальные файлы",
+               "parking": "Парковка", "wall": "Видеостена", "patrol": "Патрулирование", "evidence": "Доказательства"}
 SYSTEM_MODULES = {"devices": "devices", "event_config": "event", "storage": "config:storage",
                   "accounts": "accounts", "settings": "config"}
 
@@ -82,6 +84,10 @@ class MainWindowMixin:
         self.stack.add_named(self._dashboard_page(), "dashboard")
         self.stack.add_named(self._local_files_page(), "local_files")
         self.stack.add_named(self._board_page(), "board")
+        self.stack.add_named(self._parking_page(), "parking")
+        self.stack.add_named(self._wall_page(), "wall")
+        self.stack.add_named(self._patrol_page(), "patrol")
+        self.stack.add_named(self._evidence_page(), "evidence")
         self.stack.set_visible_child_name("overview")
         self.group_list = None
 
@@ -717,6 +723,14 @@ class MainWindowMixin:
             self._render_local_files()
         elif page == "board":
             self._render_board()
+        elif page == "parking":
+            self._render_parking()
+        elif page == "wall":
+            self._render_wall()
+        elif page == "patrol":
+            self._render_patrol()
+        elif page == "evidence":
+            self._render_evidence()
 
     def _activate_tab(self, key):  # совместимость со старым API вкладок модулей
         self._show_module(key)
@@ -2022,6 +2036,9 @@ class MainWindowMixin:
         footer.append(W.button("Тревожный выход…", lambda: self.alarm_output_dialog(record)))
         if record.get("device_id"):
             footer.append(W.button("На карте", lambda: self.show_device_on_map(record["device_id"])))
+        case_button = W.button("В дело…", None)
+        case_button.connect("clicked", lambda b: self.add_to_case_menu(b, lambda cid: self._alarm_to_case(cid, record)))
+        footer.append(case_button)
         footer.append(W.button("Сохранить", lambda: (save_fields(), self.notify("Сохранено"))))
         spacer = Gtk.Box()
         spacer.set_hexpand(True)

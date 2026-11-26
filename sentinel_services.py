@@ -193,9 +193,14 @@ class ServicesMixin:
             self._flash_map_device(event.get("device_id"), alarm=bool(rules))
             if event.get("event_type") == "access" and hasattr(self, "_on_access_event"):
                 self._on_access_event(event)
+            if str(event.get("event_type", "")).startswith("anpr") and hasattr(self, "_on_parking_plate"):
+                self._on_parking_plate(event)
         for rule in rules:
             record_id = alarms.create_alarm_record(rule, event, event_id)
             self._run_linkage(rule, event, record_id)
+        if rules and hasattr(self, "wall_show_alarm") and not any(
+                (r.get("linkage") or {}).get("wall") for r in rules):
+            self.wall_show_alarm(device_id=event.get("device_id"), any_alarm=True)
         self._schedule_panel_refresh(alarms_changed=bool(rules))
         if event.get("device_id") and hasattr(self, "timeline_cache"):
             self.timeline_cache = {k: v for k, v in self.timeline_cache.items() if k[0] != event["device_id"]}
@@ -230,6 +235,8 @@ class ServicesMixin:
                     self.trigger_alarm_output(params["device_id"], params["output"], params["auto_close"], quiet=True)
                 elif action == "ptz":
                     self._goto_preset_for_event(params)
+                elif action == "wall":
+                    self.wall_show_alarm(params["wall_id"], params["device_id"])
                 elif action == "email":
                     self._send_alarm_email(rule, event, picture, params["to"])
                 elif action == "popup" and storage.get_setting("alarm_popup", "1") == "1":

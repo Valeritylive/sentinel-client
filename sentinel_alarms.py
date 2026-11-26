@@ -40,6 +40,8 @@ EVENT_TYPES = {
     "hdd": ("Ошибка диска", "event", ("diskfull", "diskerror", "hdError", "hdFull")),
     "offline": ("Устройство не в сети", "event", ("device_offline",)),
     "user": ("Пользовательское событие", "event", ("user_defined",)),
+    "patrol_missed": ("Патруль: пропущена точка", "event", ("patrol",)),
+    "parking_denied": ("Парковка: отказ во въезде", "vehicle", ("parking",)),
 }
 EVENT_GROUPS = (
     ("Видео", ("motion", "line", "intrusion", "region_entrance", "region_exit", "tamper", "video_loss", "io")),
@@ -47,6 +49,7 @@ EVENT_GROUPS = (
     ("ANPR", ("anpr_any", "anpr_matched", "anpr_mismatched")),
     ("Контроль доступа", ("access",)),
     ("Обслуживание", ("hdd", "offline")),
+    ("Объект", ("patrol_missed", "parking_denied")),
     ("Пользовательские", ("user",)),
 )
 
@@ -401,6 +404,8 @@ def linkage_plan(rule, event):
         if not ptz.get("device_id"):
             ptz["device_id"] = event.get("device_id")
         plan.append(("ptz", ptz))
+    if link.get("wall"):
+        plan.append(("wall", {"wall_id": int(link["wall"]), "device_id": event.get("device_id")}))
     if link.get("email") and link.get("email_to"):
         plan.append(("email", {"to": link["email_to"]}))
     if link.get("popup", True):

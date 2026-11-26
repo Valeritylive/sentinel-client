@@ -22,6 +22,7 @@ import sentinel_people as people
 import sentinel_recording as recording
 import sentinel_security as security
 import sentinel_storage as storage
+import sentinel_videowall as videowall
 import sentinel_widgets as W
 
 TABS = (("devices", "Управление устройствами", "devices"), ("person", "Персона", "persons"),
@@ -1443,6 +1444,11 @@ class SystemWindow(Gtk.Window):
                                                 "auto_close": auto_close.get_value_as_int()}), render_outputs()))))
 
         render_outputs()
+        walls = videowall.load_walls()
+        wall_ids = [None] + [w["id"] for w in walls]
+        wall_choice = _field(actions, 8, "На видеостену (экран тревог)", _dropdown(
+            ["Нет"] + [w["name"] for w in walls],
+            wall_ids.index(link.get("wall")) if link.get("wall") in wall_ids else 0))
         notebook.append_page(_scroll(actions), W.label("4. Действия"))
         dialog.get_content_area().append(notebook)
         dialog.set_default_size(720, 600)
@@ -1462,7 +1468,8 @@ class SystemWindow(Gtk.Window):
                                     "email": email.get_active(), "email_to": email_to.get_text().strip(),
                                     "ptz": ({"device_id": sources[0] if sources != "all" and sources else None,
                                              "preset": ptz_preset.get_value_as_int()}
-                                            if ptz_preset.get_value_as_int() else None)}}
+                                            if ptz_preset.get_value_as_int() else None),
+                                    "wall": wall_ids[wall_choice.get_selected()]}}
                 try:
                     alarms.save_rule(data, rule_id)
                 except (ValueError, sqlite3.IntegrityError) as exc:

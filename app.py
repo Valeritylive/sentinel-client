@@ -58,6 +58,8 @@ from sentinel_board import BoardMixin
 from sentinel_viewshare import ViewShareMixin
 from sentinel_alarmmap import AlarmMapMixin
 from sentinel_accesscenter import AccessCenterMixin
+from sentinel_ops_ui import OpsMixin
+from sentinel_wall_ui import WallEvidenceMixin
 import sentinel_layouts as layouts
 import sentinel_protocols as protocols
 import sentinel_shell as shell
@@ -117,7 +119,7 @@ def make_label(text: str, css_class: str | None = None):
     return label
 
 
-class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixin, MainWindowMixin, ServicesMixin, TileBarMixin, Gtk.ApplicationWindow):
+class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixin, OpsMixin, WallEvidenceMixin, MainWindowMixin, ServicesMixin, TileBarMixin, Gtk.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Sentinel — видеонаблюдение")
         self.set_resizable(True)
@@ -2512,6 +2514,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
             self.notify(f"Безопасно перенесено паролей устройств: {migrated}")
         self.restore_saved_windows()
         self.sync_event_subscriptions()
+        self._start_patrol_timer()
         self._recorder_tick()
         self.check_all_devices(quiet=True)
         return GLib.SOURCE_REMOVE
@@ -3151,6 +3154,8 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
             else:
                 self.notify(f"Экспорт готов: {len(manifest['clips'])} из {len(clips)} · "
                             f"{bundle or folder}")
+                self.offer_add_to_case(folder, "export", f"Экспорт {public[0]['camera']} "
+                                       f"{public[0]['start']:%d.%m.%Y %H:%M}", {"clips": len(manifest["clips"])})
             return
         clip = clips[index]
         match = clip["_match"]

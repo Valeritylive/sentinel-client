@@ -454,6 +454,10 @@ class ServerLink:
             return
         text = None
         if kind == "alarm":
+            if data.get("device_id") and hasattr(self.owner, "wall_show_alarm"):
+                local = self._local_device_id(data)
+                if local:
+                    GLib.idle_add(lambda: (self.owner.wall_show_alarm(device_id=local, any_alarm=True), False)[1])
             text = (f"Сервер · тревога «{data.get('rule_name', '')}»: {data.get('device_name', '')} "
                     f"{alarms.event_title(data.get('event_type', ''))}")
         elif kind == "device_status" and data.get("status") == "offline":
@@ -462,6 +466,14 @@ class ServerLink:
             text = f"Сервер: {data.get('message', '')}"
         if text:
             GLib.idle_add(self.owner.notify, text, kind in ("alarm", "device_status") or bool(data.get("error")))
+
+    def _local_device_id(self, data):
+        """id камеры в каталоге клиента для устройства тревоги сервера (по адресу и каналу)."""
+        host, channel = data.get("host"), str(data.get("channel") or "")
+        for device in self.owner.devices:
+            if host and device["host"] == host and str(device.get("channel")) == channel:
+                return device["id"]
+        return None
 
     def pull_devices(self):
         """Скопировать каталог сервера в клиент (вызывать в рабочем потоке). (добавлено, [ошибки])."""

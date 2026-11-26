@@ -368,3 +368,70 @@ class AccessCenterSmoke(ShellSmoke):
         self.assertTrue(w.att_records)
         w.att_mode.get_selected = lambda: 1
         w.render_attendance()
+
+
+class Phase4Smoke(ShellSmoke):
+    def test_modules_render(self):
+        w = self.win
+        for key in ("parking", "wall", "patrol", "evidence"):
+            w._show_module(key)
+            self.assertEqual(w.stack.get_visible_child_name(), key)
+
+    def test_parking_plate_opens_barrier(self):
+        import sentinel_parking as parking
+        self._add("10.0.0.5", [1, 2])
+        w = self.win
+        cams = [d["id"] for d in w.devices]
+        staff = people.add_vehicle_list("Сотрудники")
+        people.save_vehicle({"plate": "А123ВС77", "list_id": staff})
+        parking.save_lot({"name": "P", "mode": parking.MODE_LISTS, "allow_lists": [staff],
+                          "entry_cameras": [cams[0]], "exit_cameras": [cams[1]],
+                          "barrier": {"device_id": cams[0], "output": 2, "auto_close": 3}})
+        opened = []
+        w.trigger_alarm_output = lambda d, o, a=0, quiet=False: opened.append((d, o, a))
+        base = {"time": "2026-11-26T08:00:00", "device_name": "cam", "channel": "1", "raw_type": "ANPR",
+                "event_type": "anpr_any", "category": "vehicle", "state": "active", "details": {}}
+        w.handle_event(dict(base, device_id=cams[0], plate="А123ВС77"))
+        self.assertEqual(opened, [(cams[0], 2, 3)])
+        w.handle_event(dict(base, device_id=cams[0], plate="Е001ЕЕ77"))
+        self.assertEqual(len(opened), 1)
+        self.assertEqual(parking.day_stats(parking.load_lots()[0]["id"], "2026-11-26")["denied"], 1)
+        w._show_module("parking")
+
+    def test_wall_output_and_alarm(self):
+        import sentinel_videowall as wall
+        self._add("10.0.0.5", [1, 2])
+        w = self.win
+        cams = [d["id"] for d in w.devices]
+        wid = wall.save_wall("Стена", 1, 2, alarm_screen=1, all_alarms=True)
+        wall.save_screens(wid, wall.place_cameras(wall.get_wall(wid)["screens"], 0, cams))
+        w.wall_choice.get_selected = lambda: 0
+        w._show_module("wall")
+        started = []
+
+        class FakeWindow:
+            def __init__(self, *a):
+                self.session_credentials, self.streams = {}, {}
+            def connect(self, *a): pass
+            def present(self): pass
+            def close(self): pass
+            def get_visible(self): return True
+            def start_assignments(self, assignments, *a): started.append(len(assignments))
+            def _start_preview(self, slot, device, creds): started.append(("alarm", slot, device["id"]))
+
+        import app as app_module
+        with patch.object(app_module, "MonitorWindow", FakeWindow):
+            w.toggle_wall_output()
+        self.assertEqual(started[:2], [2, 0])
+        w.wall_show_alarm(device_id=cams[1], any_alarm=True)
+        self.assertEqual(started[-1], ("alarm", 0, cams[1]))
+
+    def test_evidence_from_alarm(self):
+        import sentinel_evidence as evidence
+        w = self.win
+        cid = evidence.create_case("Инцидент")
+        w._alarm_to_case(cid, {"id": 5, "rule_name": "Движение", "event_type": "motion", "time": "t",
+                               "device_name": "cam", "picture_path": ""})
+        self.assertEqual(evidence.load_items(cid)[0]["kind"], "alarm")
+        w._show_module("evidence")
+        w.open_case(cid)

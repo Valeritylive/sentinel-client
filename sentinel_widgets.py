@@ -105,6 +105,14 @@ expander title { padding: 6px 4px; }
 .door-card.door-closed { border-left-color: #4a8fe0; }
 .door-card.door-unknown { border-left-color: #6b6d74; }
 .door-state { font-weight: bold; }
+.list-row { padding: 6px 8px; border-radius: 4px; background: transparent; }
+.list-row label { color: #d7dae0; }
+.list-row:hover { background: #2a2c31; }
+.wall-screen { background: #1b1c20; border: 2px solid #3a3c43; border-radius: 6px; padding: 6px; }
+.wall-alarm-screen { border-color: #e8232c; }
+.wall-cell { background: #0d0e10; color: #cfd3da; border: 1px solid #2c2e33; border-radius: 2px;
+             min-height: 40px; font-size: 11px; }
+.wall-cell:hover { border-color: #e8232c; }
 .table-head { color: #8b8d93; font-weight: 600; padding: 6px 4px; border-bottom: 1px solid #333; }
 .table-cell { padding: 6px 4px; border-bottom: 1px solid #2a2b2f; }
 .system-tabs button { background: transparent; border: none; border-radius: 0; padding: 8px 12px; }
@@ -161,6 +169,17 @@ def button(text, callback=None, css=None, tooltip=None, flat=False):
         widget.set_tooltip_text(tooltip)
     if flat:
         widget.set_has_frame(False)
+    if callback:
+        widget.connect("clicked", lambda *_: callback())
+    return widget
+
+
+def list_row(text, callback=None):
+    """Строка списка (маршруты, дела): текст слева, хорошо читаемый."""
+    widget = Gtk.Button()
+    widget.add_css_class("list-row")
+    widget.set_has_frame(False)
+    widget.set_child(label(text))
     if callback:
         widget.connect("clicked", lambda *_: callback())
     return widget
