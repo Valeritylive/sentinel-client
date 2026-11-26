@@ -284,7 +284,8 @@ def export_case(case_id, target_dir, username):
     target_dir = Path(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    bundle = target_dir / f"case_{re.sub(r'[^\w.-]', '_', case['number'])}_{stamp}.zip"
+    safe_number = re.sub(r"[^\w.-]", "_", case["number"])
+    bundle = target_dir / f"case_{safe_number}_{stamp}.zip"
     log(case_id, username, "export", str(bundle))
     sums, manifest_items = [], []
     with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
