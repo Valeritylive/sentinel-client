@@ -55,6 +55,26 @@ SYSTEM_MODULES = {"devices": "devices", "event_config": "event", "storage": "con
                   "accounts": "accounts", "settings": "config"}
 
 
+class _HalfSizePaintable(GObject.Object, Gdk.Paintable):
+    """Текстура, нарисованная в 2× (для HiDPI), с естественным размером вдвое меньше."""
+
+    def __init__(self, texture):
+        super().__init__()
+        self.texture = texture
+
+    def do_snapshot(self, snapshot, width, height):
+        self.texture.snapshot(snapshot, width, height)
+
+    def do_get_intrinsic_width(self):
+        return self.texture.get_width() // 2
+
+    def do_get_intrinsic_height(self):
+        return self.texture.get_height() // 2
+
+    def do_get_intrinsic_aspect_ratio(self):
+        return self.texture.get_width() / max(1, self.texture.get_height())
+
+
 class MainWindowMixin:
     # ================================================================== построение
     def _build_window(self):
@@ -934,22 +954,23 @@ class MainWindowMixin:
             self.home_box.append(W.label(section, "section-title"))
             flow = Gtk.FlowBox()
             flow.set_selection_mode(Gtk.SelectionMode.NONE)
-            flow.set_homogeneous(True)
-            flow.set_max_children_per_line(6)
-            flow.set_min_children_per_line(2)
+            flow.set_homogeneous(False)
+            flow.set_max_children_per_line(8)
+            flow.set_min_children_per_line(1)
             flow.set_column_spacing(10)
             flow.set_row_spacing(10)
             for item in allowed:
                 tile = Gtk.Button()
                 tile.add_css_class("home-tile")
+                tile.set_halign(Gtk.Align.START)
                 body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
                 art = Gtk.Box()
                 art.add_css_class("home-art")
-                art.add_css_class("home-art-" + str(list(module_art.ACCENTS).index(section)
-                                                     if section in module_art.ACCENTS else 0))
                 art.append(self._module_picture(item))
                 body.append(art)
                 caption = W.label(item.title, "home-tile-title", xalign=0.5, wrap=True)
+                caption.set_max_width_chars(22)
+                caption.set_width_chars(22)
                 caption.set_vexpand(True)
                 caption.set_valign(Gtk.Align.CENTER)
                 body.append(caption)
@@ -977,10 +998,9 @@ class MainWindowMixin:
             cache[item.key] = texture or False
         if not texture:
             return W.label(item.icon, "home-tile-icon", xalign=0.5)
-        picture = Gtk.Picture.new_for_paintable(texture)
+        picture = Gtk.Picture.new_for_paintable(_HalfSizePaintable(texture))
         picture.set_can_shrink(True)
-        picture.set_size_request(150, 100)
-        picture.set_hexpand(True)
+        picture.set_size_request(240, 160)
         return picture
 
     def _activate_tab(self, key):  # совместимость со старым API вкладок модулей
