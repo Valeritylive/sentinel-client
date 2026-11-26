@@ -51,6 +51,7 @@ import sentinel_storage as storage
 import sentinel_widgets as W
 from sentinel_mainwin import MainWindowMixin
 from sentinel_services import ServicesMixin
+from sentinel_tilebar import TileBarMixin
 import sentinel_layouts as layouts
 import sentinel_protocols as protocols
 import sentinel_shell as shell
@@ -110,7 +111,7 @@ def make_label(text: str, css_class: str | None = None):
     return label
 
 
-class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
+class SentinelWindow(MainWindowMixin, ServicesMixin, TileBarMixin, Gtk.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Sentinel — видеонаблюдение")
         self.set_resizable(True)
@@ -1283,15 +1284,19 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             pane.add_controller(scroll)
             zoom_drag = Gtk.GestureDrag()
             # drag-end передаёт только смещение; начальная точка берётся из get_start_point().
-            zoom_drag.connect("drag-end", lambda g, dx, dy, i=index, p=pane: self._digital_zoom_region(
+            zoom_drag.connect("drag-end", lambda g, dx, dy, i=index, p=pane: self._tile_drag_end(
                 i, *g.get_start_point()[1:], dx, dy, p.get_width(), p.get_height()))
             pane.add_controller(zoom_drag)
+            tools = self._build_tile_toolbar(index, pane)
             aspect_frame.set_child(pane)
             col, row, colspan, rowspan = cells[index]
             self.camera_grid.attach(aspect_frame, col, row, colspan, rowspan)
             self.video_slots.append({"pane": pane, "aspect_frame": aspect_frame,
                                      "aspect_ratio": aspect_ratio, "picture": picture, "placeholder": placeholder,
-                                     "caption": caption, "device": None})
+                                     "caption": caption, "device": None, **tools})
+        self._tile_ptz_slots().intersection_update(range(self.layout_count))
+        for index in [i for i in self._talk_sessions() if i >= self.layout_count]:
+            self.stop_talk(index)
         for index, state in self.streams.items():
             if index >= self.layout_count:
                 continue
@@ -1301,6 +1306,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
                 f"● LIVE   {state['device']['name']}  ·  {state['device']['host']} CH {state['device']['channel']}")
             slot["placeholder"].set_visible(False)
             slot["picture"].set_paintable(paintables.get(index))
+            self._sync_tile_toolbar(index)
         for slot, entry in list(getattr(self, "slot_resources", {}).items()):
             if slot < self.layout_count:
                 self._place_resource(slot, entry)
@@ -2507,6 +2513,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
                 self.alarm_response.close()
             except Exception:
                 pass
+        self.stop_talk()
         self.stop_all_streams()
         for window in list(self.monitor_windows):
             window.close()
@@ -3247,6 +3254,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         if not state["playback"]:
             self._mark_view_dirty()
         self._update_stream_count()
+        self._sync_tile_toolbar(slot_index)
         if hasattr(self, "timeline"):
             self._load_timeline_segments()
 
@@ -3402,6 +3410,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             item["placeholder"].set_visible(True)
             item["caption"].set_text("")
             item["device"] = None
+            self._sync_tile_toolbar(slot)
         self._update_stream_count()
         return GLib.SOURCE_REMOVE
 
@@ -3438,6 +3447,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         if not getattr(self, "compact_audio_button", False):
             audio_label += " Звук"
         self.audio_button.set_label(audio_label)
+        self._sync_tile_toolbar(self.selected_slot)
 
     def toggle_recording(self):
         state = self.streams.get(self.selected_slot)
@@ -3449,6 +3459,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             recording.stop()
             state["recording"] = None
             self._set_record_button_label("● Запись")
+            self._sync_tile_toolbar(self.selected_slot)
             self.notify("Запись остановлена")
             return
         if state.get("cloud") is not None:
@@ -3467,6 +3478,7 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
             self.notify(f"Не удалось запустить FFmpeg: {exc}")
             return
         self._set_record_button_label("■ Остановить запись")
+        self._sync_tile_toolbar(self.selected_slot)
         self.notify("Запись начата")
 
     def _ffmpeg_failed(self, code, details):
@@ -3647,6 +3659,7 @@ class MonitorWindow(SentinelWindow):
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key_pressed)
         self.add_controller(keys)
+        self._install_ptz_keys()
 
     def start_assignments(self, assignments, shared_credentials, use_substream=True):
         self.add_substream = use_substream
@@ -3696,6 +3709,7 @@ class MonitorWindow(SentinelWindow):
         if getattr(self, "assignment_source", 0):
             GLib.source_remove(self.assignment_source)
             self.assignment_source = 0
+        self.stop_talk()
         self.stop_all_streams()
         if self in self.parent_window.monitor_windows:
             self.parent_window.monitor_windows.remove(self)

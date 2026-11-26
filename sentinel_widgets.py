@@ -53,6 +53,14 @@ expander title { padding: 6px 4px; }
 .camera-tile { background: #26272b; border: 1px solid #141517; border-radius: 0; }
 .camera-tile:hover { border-color: #55565c; }
 .camera-tile.selected { border: 2px solid #e8232c; }
+.tile-toolbar { background: alpha(#000, 0.6); border-radius: 4px; padding: 1px; }
+.tile-tool { color: #e6e6e6; min-width: 24px; min-height: 22px; padding: 1px 4px; font-size: 11px; }
+.tile-tool:hover { background: alpha(#fff, 0.14); }
+.tile-tool-on { color: #fff; background: #e8232c; }
+.tile-ptz-pad { background: alpha(#000, 0.5); border-radius: 6px; padding: 3px; }
+.tile-ptz-label { color: #bbb; font-size: 10px; }
+.tile-ptz-pad button { background: alpha(#000, 0.35); background-image: none; color: #eee; border: none; box-shadow: none; min-width: 24px; min-height: 22px; padding: 0; }
+.tile-ptz-pad button:hover { background: alpha(#fff, 0.2); }
 .tile-caption { color: #eee; font-size: 11px; background: alpha(#000, 0.45); padding: 1px 6px; border-radius: 2px; }
 .playback-bar { background: #1b1c1f; border-top: 1px solid #000; padding: 4px 8px; }
 .mode-button { background: #26272b; border: none; border-radius: 3px; padding: 2px 10px; }

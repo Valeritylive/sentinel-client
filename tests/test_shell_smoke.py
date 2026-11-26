@@ -217,3 +217,43 @@ class AddDialogSmoke(ShellSmoke):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TileToolbarSmoke(ShellSmoke):
+    def _fake_stream(self, index=0):
+        state = {"device": {"name": "Cam", "host": "10.0.0.5", "channel": 1, "stream": "main",
+                            "protocol": "hikvision", "http_port": 80},
+                 "base_device": {"id": 1, "name": "Cam", "host": "10.0.0.5", "channel": 1, "http_port": 80},
+                 "credentials": {"username": "u", "password": "p"}, "playback": False,
+                 "digital_zoom": 1.0, "digital_x": 0.5, "digital_y": 0.5, "cloud": None}
+        self.win.streams[index] = state
+        return state
+
+    def test_every_tile_has_toolbar_and_ptz_pad(self):
+        for slot in self.win.video_slots:
+            self.assertIn("toolbar", slot)
+            self.assertIn("ptz_pad", slot)
+            self.assertEqual(set(slot["tool_buttons"]),
+                             {"capture", "clip", "audio", "talk", "zoom", "stream", "ptz", "close"})
+
+    def test_zoom_button_toggles_digital_zoom(self):
+        state = self._fake_stream()
+        self.win._tile_tool(0, "zoom")
+        self.assertEqual(state["digital_zoom"], 2.0)
+        self.win._tile_tool(0, "zoom")
+        self.assertEqual(state["digital_zoom"], 1.0)
+
+    def test_ptz_mode_click_sends_position3d(self):
+        self._fake_stream()
+        sent = []
+        with patch.object(self.win, "send_position3d", lambda i, s, e=None: sent.append((i, s, e))), \
+             patch.object(self.win, "_digital_zoom_region", lambda *a: sent.append("digital")):
+            self.win._tile_drag_end(0, 100, 50, 0, 0, 400, 200)
+            self.assertEqual(sent, ["digital"])
+            self.win.toggle_tile_ptz(0)
+            self.win._tile_drag_end(0, 100, 50, 0, 0, 400, 200)
+            self.win._tile_drag_end(0, 100, 50, 200, 100, 400, 200)
+        self.assertEqual(sent[1], (0, (0.25, 0.25), None))
+        self.assertEqual(sent[2], (0, (0.25, 0.25), (0.75, 0.75)))
+        self.win.toggle_tile_ptz(0)
+        self.assertNotIn(0, self.win.tile_ptz)

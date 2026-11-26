@@ -125,6 +125,7 @@ class MainWindowMixin:
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key_pressed)
         self.add_controller(keys)
+        self._install_ptz_keys()
         activity = Gtk.EventControllerMotion()
         activity.connect("motion", lambda *_: self._note_activity())
         self.add_controller(activity)
