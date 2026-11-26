@@ -19,7 +19,8 @@ class FakeElement:
         self.factory, self.props, self.state = factory, {}, None
 
     def set_property(self, name, value): self.props[name] = value
-    def connect(self, *a): pass
+    def connect(self, signal, *a):
+        self.props.setdefault("_signals", {})[signal] = a
     def get_bus(self): return self
     def add_signal_watch(self): pass
     def set_state(self, state):
@@ -37,6 +38,10 @@ class FakeGst:
     class Caps:
         @staticmethod
         def from_string(text): return text
+
+    @staticmethod
+    def util_set_object_arg(element, name, value):
+        element.props[name] = value
 
     def __init__(self, available):
         self.available, self.made = set(available), []
@@ -118,7 +123,35 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class FakeRtspSrc(FakeElement):
+    def __init__(self):
+        super().__init__("rtspsrc")
+
+    def find_property(self, name):
+        return object() if name in ("onvif-mode", "protocols") else None
+
+
 class ArchiveTimeTests(StartPreviewTests):
+    def test_archive_rtsp_source_uses_onvif_clock_range(self):
+        gst = FakeGst({"playbin3", "playbin", "appsink"})
+        with patch.object(app_module, "Gst", gst):
+            self.win._start_preview(0, dict(DEVICE), dict(CREDS),
+                                    playback=("2026-11-26 09:00:13", "2026-11-26 09:10:13"))
+            player = [e for e in gst.made if e.factory == "playbin3"][0]
+            handler, uri = player.props["_signals"]["source-setup"]
+            source = FakeRtspSrc()
+            handler(player, source, uri)
+        self.assertEqual(source.props, {"onvif-mode": "true", "protocols": "tcp"})
+
+    def test_live_has_no_source_hook(self):
+        live = self._start({"playbin3", "playbin", "appsink"})
+        self.assertNotIn("source-setup", live.props.get("_signals", {}))
+
+    def test_local_file_has_no_source_hook(self):
+        local = self._start({"playbin3", "playbin", "appsink"}, direct_uri="file:///tmp/x.mkv",
+                            stream_override="main")
+        self.assertNotIn("source-setup", local.props.get("_signals", {}))
+
     def test_archive_url_uses_nvr_wall_clock(self):
         import sentinel_archive as archive
         from datetime import timedelta, timezone

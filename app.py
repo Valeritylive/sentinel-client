@@ -3275,6 +3275,8 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
                  ) else 0.04}
         sink.connect("new-sample", self._on_new_sample, state)
         pipeline.set_property("uri", uri)
+        if archive and protocols.archive_rtsp_options(uri):
+            pipeline.connect("source-setup", self._archive_source_setup, uri)
         pipeline.set_property("video-sink", sink)
         pipeline.set_property("mute", True)
         pipeline.set_property("volume", 1.0)
@@ -3305,6 +3307,13 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         self._sync_tile_toolbar(slot_index)
         if hasattr(self, "timeline"):
             self._load_timeline_segments()
+
+    @staticmethod
+    def _archive_source_setup(_pipeline, source, uri):
+        """rtspsrc архива: Range: clock=… вместо npt, иначе NVR играет файл с начала."""
+        for name, value in protocols.archive_rtsp_options(uri):
+            if source.find_property(name) is not None:
+                Gst.util_set_object_arg(source, name, value)
 
     def _on_new_sample(self, sink, state):
         sample = sink.emit("pull-sample")
