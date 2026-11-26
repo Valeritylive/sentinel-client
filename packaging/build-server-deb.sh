@@ -1,11 +1,11 @@
 #!/bin/sh
-# Пакет sentinel-server: серверная часть без GTK (systemd-служба).
+# Пакет sentinel-pro-server (до 0.6.4.3 — sentinel-server): серверная часть без GTK (systemd-служба).
 set -eu
 
 SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 VERSION=$(cat "$SOURCE_DIR/VERSION")
 PACKAGE_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/sentinel-server-deb.XXXXXX")
-OUTPUT=${1:-"$SOURCE_DIR/sentinel_server_${VERSION}_all.deb"}
+OUTPUT=${1:-"$SOURCE_DIR/sentinel-pro-server_${VERSION}_all.deb"}
 MODULES="sentinel_server sentinel_engine sentinel_storage sentinel_alarms sentinel_hikconnect sentinel_security
 sentinel_protocols sentinel_people sentinel_recording sentinel_layouts sentinel_devmgmt sentinel_remote
 sentinel_server_ctl sentinel_server_settings sentinel_server_tray sentinel_widgets sentinel_timeline"
@@ -93,7 +93,7 @@ if [ "$1" = configure ]; then
             systemctl try-restart sentinel-server.service >/dev/null 2>&1 || true
         fi
     fi
-    echo "sentinel-server: откройте «Sentinel PRO Server» в меню приложений — появится значок в трее"
+    echo "sentinel-pro-server: откройте «Sentinel PRO Server» в меню приложений — появится значок в трее"
     echo "и окно, где задаются логин и пароль администратора. Без графики:"
     echo "  sudo sentinel-server reset-password    # логин admin, пароль спросит"
 fi
@@ -111,12 +111,15 @@ EOF
 chmod 0755 "$PACKAGE_ROOT/DEBIAN/postinst" "$PACKAGE_ROOT/DEBIAN/prerm"
 
 cat > "$PACKAGE_ROOT/DEBIAN/control" <<EOF
-Package: sentinel-server
+Package: sentinel-pro-server
 Version: ${VERSION}-1
 Section: video
 Priority: optional
 Architecture: all
 Maintainer: Sentinel contributors
+Provides: sentinel-server
+Conflicts: sentinel-server
+Replaces: sentinel-server
 Description: Sentinel PRO Server - security management server
  Headless service for Sentinel PRO: shared device catalog, users and roles, ISAPI event
  subscriptions, alarm rules, PC backup recording and P2P cloud account sync,

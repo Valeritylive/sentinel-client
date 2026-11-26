@@ -242,7 +242,7 @@ def get_status(settings=None, props=None, health=...):
     load = props.get("LoadState", "")
     if not props or load == "not-found":
         return Status("missing", "Служба не установлена",
-                      "Установите пакет sentinel-server: sudo apt install ./sentinel_server_*.deb", urls=urls)
+                      "Установите пакет sentinel-pro-server: sudo apt install ./sentinel-pro-server_*.deb", urls=urls)
     active = props.get("ActiveState", "")
     if active in ("activating", "deactivating", "reloading"):
         text = "Запускается…" if active != "deactivating" else "Останавливается…"
@@ -323,7 +323,7 @@ def helper_command():
         return ["pkexec", str(INSTALLED_HELPER)]
     if os.geteuid() == 0:
         return [shutil.which("python3") or "python3", str(SOURCE_HELPER)]
-    raise ControlError("Помощник sentinel-server-helper не установлен: установите пакет sentinel-server")
+    raise ControlError("Помощник sentinel-server-helper не установлен: установите пакет sentinel-pro-server")
 
 
 def run_helper(*args, payload=None, timeout=120):

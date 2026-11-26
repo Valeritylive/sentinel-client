@@ -25,10 +25,10 @@ python3 app.py
 ```sh
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user ./Sentinel-0.5.0-x86_64.flatpak
-flatpak run io.sentinel.VideoClient
+flatpak run io.sentinel.SentinelPro
 ```
 
-В Flatpak данные хранятся отдельно: `~/.var/app/io.sentinel.VideoClient/data/sentinel` (а не `~/.local/share/sentinel`). Снимки и записи — в `~/Pictures/Sentinel` и `~/Videos/Sentinel`.
+В Flatpak данные хранятся отдельно: `~/.var/app/io.sentinel.SentinelPro/data/sentinel` (а не `~/.local/share/sentinel`). До 0.6.4.3 у Flatpak-версии был id `io.sentinel.VideoClient`; чтобы перенести её данные, один раз выполните `mkdir -p ~/.var/app/io.sentinel.SentinelPro/data && cp -a ~/.var/app/io.sentinel.VideoClient/data/sentinel ~/.var/app/io.sentinel.SentinelPro/data/` до первого запуска новой версии. Снимки и записи — в `~/Pictures/Sentinel` и `~/Videos/Sentinel`.
 
 Релизные `.deb` и AppImage собираются GitHub Actions для x86_64. Debian-пакет устанавливает системные компоненты GTK и GStreamer через зависимости пакета; рецепт AppImage включает Python, GTK, GStreamer, Secret Service CLI и FFmpeg из Ubuntu 22.04. Видеодрайверы и системную службу Secret Service предоставляет рабочее окружение. Для публикации релиза создайте и отправьте тег, совпадающий с файлом `VERSION` (например, `v0.1.4`) — workflow проверит unit-тесты, соберёт пакеты и прикрепит их к GitHub Release. Сборку локально можно запустить на Ubuntu 22.04 с установленными `dpkg-deb`, `python3-pip` и зависимостями AppImageBuilder (`appimage-builder==1.1.0`, `packaging==21.3`):
 
@@ -173,10 +173,10 @@ python3 sentinel_server.py hikconnect-login --account user@example.com --region 
 python3 sentinel_server.py hikconnect-devices
 ```
 
-Пакет `sentinel_server_<версия>_all.deb` ставит службу systemd от отдельного пользователя `sentinel` (база в `/var/lib/sentinel-server`, настройки в `/etc/default/sentinel-server`):
+Пакет `sentinel-pro-server_<версия>_all.deb` (до 0.6.4.3 назывался `sentinel-server` и заменяется автоматически) ставит службу systemd от отдельного пользователя `sentinel` (база в `/var/lib/sentinel-server`, настройки в `/etc/default/sentinel-server`):
 
 ```sh
-sudo apt install ./sentinel_server_0.6.4.3_all.deb
+sudo apt install ./sentinel-pro-server_0.6.4.3_all.deb
 ```
 
 При первой установке служба включается и запускается сама (слушает только `127.0.0.1`). Дальше всё делается с рабочего стола:

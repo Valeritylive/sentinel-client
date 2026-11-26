@@ -9,7 +9,9 @@ import subprocess
 import threading
 from pathlib import Path
 
-APP_ID = "io.sentinel.VideoClient"
+# Атрибут записей в системном хранилище секретов. Не менять: по нему находятся пароли,
+# сохранённые прежними версиями (до переименования в Sentinel PRO id был таким же).
+SECRET_APPLICATION = "io.sentinel.VideoClient"
 SECRET_LABEL = "Sentinel camera credentials"
 # SENTINEL_DATA_DIR позволяет серверу (служба systemd) держать свою базу отдельно от клиента.
 DATA = (Path(os.environ["SENTINEL_DATA_DIR"]).expanduser() if os.environ.get("SENTINEL_DATA_DIR")
@@ -426,7 +428,7 @@ def _secret_tool(action: str, device, secret: str | None = None) -> str | None:
     if action == "store":
         command.append(f"--label={SECRET_LABEL}")
     command.extend((
-        "application", APP_ID,
+        "application", SECRET_APPLICATION,
         "host", str(device["host"]),
         "http_port", str(int(device.get("http_port", 80))),
     ))

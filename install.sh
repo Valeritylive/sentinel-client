@@ -13,7 +13,7 @@ for module in "$SOURCE_DIR"/sentinel_*.py; do
     install -m 0644 "$module" "$APP_DIR/$(basename "$module")"
 done
 install -m 0644 "$SOURCE_DIR/VERSION" "$APP_DIR/VERSION"
-install -m 0644 "$SOURCE_DIR/io.sentinel.VideoClient.svg" "$ICON_DIR/io.sentinel.VideoClient.svg"
-sed "s|@APP_PATH@|$APP_DIR/app.py|g" "$SOURCE_DIR/io.sentinel.VideoClient.desktop.in" > "$DESKTOP_DIR/io.sentinel.VideoClient.desktop"
-chmod 0644 "$DESKTOP_DIR/io.sentinel.VideoClient.desktop"
+install -m 0644 "$SOURCE_DIR/io.sentinel.SentinelPro.svg" "$ICON_DIR/io.sentinel.SentinelPro.svg"
+sed "s|@APP_PATH@|$APP_DIR/app.py|g" "$SOURCE_DIR/io.sentinel.SentinelPro.desktop.in" > "$DESKTOP_DIR/io.sentinel.SentinelPro.desktop"
+chmod 0644 "$DESKTOP_DIR/io.sentinel.SentinelPro.desktop"
 printf 'Installed Sentinel GTK app. Start it from the desktop application menu.\n'

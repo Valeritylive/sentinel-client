@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.sentinel.VideoClient</id>
+  <id>io.sentinel.SentinelPro</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <name>Sentinel PRO</name>
@@ -12,7 +12,13 @@
       access control, e-maps and backup recording to the local computer.
     </p>
   </description>
-  <launchable type="desktop-id">io.sentinel.VideoClient.desktop</launchable>
+  <launchable type="desktop-id">io.sentinel.SentinelPro.desktop</launchable>
+  <provides>
+    <id>io.sentinel.VideoClient</id>
+  </provides>
+  <replaces>
+    <id>io.sentinel.VideoClient</id>
+  </replaces>
   <url type="homepage">https://github.com/Valeritylive/sentinel-client</url>
   <developer id="io.sentinel">
     <name>Sentinel contributors</name>

@@ -94,7 +94,7 @@ from sentinel_storage import (
     save_credentials,
 )
 
-APP_ID = "io.sentinel.VideoClient"
+APP_ID = "io.sentinel.SentinelPro"
 APP_VERSION = Path(__file__).resolve().parent.joinpath("VERSION").read_text(encoding="utf-8").strip()
 ROOT = Path(__file__).resolve().parent
 # Hikvision sends a keep-alive roughly every 10 s; a short socket timeout kills a healthy alert stream.

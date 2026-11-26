@@ -6,13 +6,13 @@
 #
 # Локальная сборка:
 #   flatpak install flathub org.gnome.Platform//47 org.gnome.Sdk//47
-#   flatpak-builder --user --install --force-clean build-dir packaging/flatpak/io.sentinel.VideoClient.yml
-#   flatpak run io.sentinel.VideoClient
-app-id: io.sentinel.VideoClient
+#   flatpak-builder --user --install --force-clean build-dir packaging/flatpak/io.sentinel.SentinelPro.yml
+#   flatpak run io.sentinel.SentinelPro
+app-id: io.sentinel.SentinelPro
 runtime: org.gnome.Platform
 runtime-version: '47'
 sdk: org.gnome.Sdk
-command: sentinel-video-client
+command: sentinel-pro
 finish-args:
   - --share=network            # камеры, регистраторы, SADP-поиск (мультикаст)
   - --share=ipc
@@ -82,12 +82,12 @@ modules:
       - install -Dm644 app.py /app/lib/sentinel/app.py
       - for module in sentinel_*.py; do install -Dm644 "$module" "/app/lib/sentinel/$module"; done
       - install -Dm644 VERSION /app/lib/sentinel/VERSION
-      - printf '#!/bin/sh\nexec python3 /app/lib/sentinel/app.py "$@"\n' > sentinel-video-client
-      - install -Dm755 sentinel-video-client /app/bin/sentinel-video-client
-      - install -Dm644 io.sentinel.VideoClient.svg /app/share/icons/hicolor/scalable/apps/io.sentinel.VideoClient.svg
+      - printf '#!/bin/sh\nexec python3 /app/lib/sentinel/app.py "$@"\n' > sentinel-pro
+      - install -Dm755 sentinel-pro /app/bin/sentinel-pro
+      - install -Dm644 io.sentinel.SentinelPro.svg /app/share/icons/hicolor/scalable/apps/io.sentinel.SentinelPro.svg
       - install -d /app/share/applications
-      - sed 's|^Exec=.*|Exec=sentinel-video-client|' io.sentinel.VideoClient.desktop.in > /app/share/applications/io.sentinel.VideoClient.desktop
-      - install -Dm644 packaging/flatpak/io.sentinel.VideoClient.metainfo.xml /app/share/metainfo/io.sentinel.VideoClient.metainfo.xml
+      - sed 's|^Exec=.*|Exec=sentinel-pro|' io.sentinel.SentinelPro.desktop.in > /app/share/applications/io.sentinel.SentinelPro.desktop
+      - install -Dm644 packaging/flatpak/io.sentinel.SentinelPro.metainfo.xml /app/share/metainfo/io.sentinel.SentinelPro.metainfo.xml
     sources:
       - type: dir
         path: ../..

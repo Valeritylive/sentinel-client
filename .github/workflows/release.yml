@@ -46,20 +46,20 @@ jobs:
 
       - name: Validate Debian package metadata
         run: |
-          for deb in sentinel_*.deb; do dpkg-deb --info "$deb"; done
-          sed 's|@APP_PATH@|/usr/lib/sentinel/app.py|g' io.sentinel.VideoClient.desktop.in > /tmp/io.sentinel.VideoClient.desktop
-          desktop-file-validate /tmp/io.sentinel.VideoClient.desktop
+          for deb in sentinel-pro*.deb; do dpkg-deb --info "$deb"; done
+          sed 's|@APP_PATH@|/usr/lib/sentinel/app.py|g' io.sentinel.SentinelPro.desktop.in > /tmp/io.sentinel.SentinelPro.desktop
+          desktop-file-validate /tmp/io.sentinel.SentinelPro.desktop
           mkdir -p /tmp/sentinel-appimage
-          sed 's|^Exec=.*|Exec=usr/bin/python3 opt/sentinel/app.py|' io.sentinel.VideoClient.desktop.in \
-            | sed 's|@APP_PATH@|opt/sentinel/app.py|g' > /tmp/sentinel-appimage/io.sentinel.VideoClient.desktop
-          desktop-file-validate /tmp/sentinel-appimage/io.sentinel.VideoClient.desktop
+          sed 's|^Exec=.*|Exec=usr/bin/python3 opt/sentinel/app.py|' io.sentinel.SentinelPro.desktop.in \
+            | sed 's|@APP_PATH@|opt/sentinel/app.py|g' > /tmp/sentinel-appimage/io.sentinel.SentinelPro.desktop
+          desktop-file-validate /tmp/sentinel-appimage/io.sentinel.SentinelPro.desktop
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: linux-packages
           path: |
-            sentinel_*.deb
+            sentinel-pro*.deb
             Sentinel-*-x86_64.AppImage
 
       - name: Publish GitHub release
@@ -70,7 +70,7 @@ jobs:
           # тег из push тега или v<VERSION> при ручном запуске (тег создаётся на этом коммите)
           tag="$GITHUB_REF_NAME"
           case "$GITHUB_REF" in refs/tags/*) ;; *) tag="v$(cat VERSION)" ;; esac
-          gh release create "$tag" sentinel_*.deb Sentinel-*-x86_64.AppImage --generate-notes --target "$GITHUB_SHA"
+          gh release create "$tag" sentinel-pro*.deb Sentinel-*-x86_64.AppImage --generate-notes --target "$GITHUB_SHA"
 
   flatpak:
     runs-on: ubuntu-24.04
@@ -88,13 +88,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .flatpak-builder
-          key: flatpak-builder-${{ hashFiles('packaging/flatpak/io.sentinel.VideoClient.yml') }}
+          key: flatpak-builder-${{ hashFiles('packaging/flatpak/io.sentinel.SentinelPro.yml') }}
 
       - name: Build Flatpak bundle
         run: |
           flatpak-builder --user --force-clean --disable-rofiles-fuse --repo=repo build-dir \
-            packaging/flatpak/io.sentinel.VideoClient.yml
-          flatpak build-bundle repo Sentinel.flatpak io.sentinel.VideoClient \
+            packaging/flatpak/io.sentinel.SentinelPro.yml
+          flatpak build-bundle repo Sentinel.flatpak io.sentinel.SentinelPro \
             --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
 
       - name: Upload Flatpak bundle
