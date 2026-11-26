@@ -245,3 +245,22 @@ class FfmpegJob:
         code = self.process.returncode
         if code != 0 and not self._stopping and self._on_error:
             self._on_error(code, stderr.decode("utf-8", "replace").strip()[-400:])
+
+
+# ------------------------------------------------------------------ архив
+# playbin (v2) не выходит из PAUSED на архивных RTSP-потоках Hikvision
+# (/Streaming/tracks/X01?starttime=…): у сегмента абсолютные часы (~1.9e9 с)
+# плюс звуковая дорожка, preroll не завершается и кадры не приходят.
+# playbin3 и uridecodebin эти потоки играют, поэтому архив запускаем через playbin3.
+ARCHIVE_PLAYERS = ("playbin3", "playbin")
+LIVE_PLAYERS = ("playbin",)
+
+
+def player_factories(archive: bool) -> tuple[str, ...]:
+    """Имена фабрик GStreamer в порядке предпочтения для живого видео или архива."""
+    return ARCHIVE_PLAYERS if archive else LIVE_PLAYERS
+
+
+def archive_stream() -> str:
+    """Поток, из которого NVR отдаёт архив: только основной (tracks/X01)."""
+    return "main"

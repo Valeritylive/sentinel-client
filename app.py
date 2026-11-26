@@ -52,6 +52,7 @@ import sentinel_widgets as W
 from sentinel_mainwin import MainWindowMixin
 from sentinel_services import ServicesMixin
 import sentinel_layouts as layouts
+import sentinel_protocols as protocols
 import sentinel_shell as shell
 from sentinel_protocols import (
     FfmpegJob,
@@ -3178,6 +3179,9 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         preview_device = dict(device)
         if stream_override is not None:
             preview_device["stream"] = stream_override
+        elif device["protocol"] == "hikvision" and playback:
+            # Архив NVR есть только у основного потока: tracks/X02 регистратор отклоняет (400).
+            preview_device["stream"] = protocols.archive_stream()
         elif device["protocol"] == "hikvision" and not playback and not direct_uri:
             preview_device["stream"] = self._desired_stream(slot_index)
         cloud = None
@@ -3187,11 +3191,16 @@ class SentinelWindow(MainWindowMixin, ServicesMixin, Gtk.ApplicationWindow):
         else:
             uri = direct_uri or self._stream_url(preview_device, credentials, playback)
         sink = Gst.ElementFactory.make("appsink", f"sentinel-video-{slot_index}")
-        pipeline = Gst.ElementFactory.make("playbin", f"sentinel-player-{slot_index}")
+        archive = playback is not None or direct_uri is not None
+        pipeline = None
+        for factory in protocols.player_factories(archive):
+            pipeline = Gst.ElementFactory.make(factory, f"sentinel-player-{slot_index}")
+            if pipeline:
+                break
         if not sink or not pipeline:
             if cloud:
                 cloud.stop()
-            raise RuntimeError("GStreamer playbin/appsink недоступен. Установите GStreamer base/good plugins.")
+            raise RuntimeError("GStreamer playbin3/playbin/appsink недоступен. Установите GStreamer base/good plugins.")
         sink.set_property("emit-signals", True)
         sink.set_property("max-buffers", 1)
         sink.set_property("drop", True)
