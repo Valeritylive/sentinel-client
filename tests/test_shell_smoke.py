@@ -75,6 +75,30 @@ class LayoutSmoke(ShellSmoke):
         self.assertEqual(w.bar_mode, "live")
         self.assertEqual(w.module_tabs.active, "main_view")
 
+    def test_live_and_playback_have_separate_grids(self):
+        w = self.win
+        w._show_module("main_view")
+        w._set_division("s9")
+        live_state = {"pipeline": None, "base_device": {"id": 1}, "credentials": {}, "playback": False}
+        w.streams[2] = live_state
+        live_grid = w.camera_grid
+        w._show_module("playback")
+        self.assertIsNot(w.camera_grid, live_grid)
+        self.assertEqual(w.streams, {})                 # своя пустая сетка воспроизведения
+        self.assertEqual(w.layout_count, 4)
+        w._set_division("s1")
+        w._show_module("main_view")
+        self.assertIs(w.camera_grid, live_grid)          # живые окна на месте
+        self.assertIs(w.streams[2], live_state)
+        self.assertEqual(w.layout_count, 9)
+        w._show_module("playback")
+        self.assertEqual(w.layout_count, 1)
+        self.assertEqual(len(w._all_grid_states()), 1)
+        w.streams.clear()
+        w.close_module_tab("playback")
+        self.assertEqual(w.grid_context, "live")
+        self.assertIs(w.streams[2], live_state)
+
     def test_start_module_setting(self):
         import sentinel_dashboard as dash
         self.assertEqual(dash.start_module(), "home")

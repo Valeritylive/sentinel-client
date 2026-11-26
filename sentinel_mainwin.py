@@ -423,10 +423,7 @@ class MainWindowMixin:
         self.door_bar.set_visible(False)
         workspace.append(self.door_bar)
 
-        self.camera_grid = Gtk.Grid(column_spacing=1, row_spacing=1)
-        self.camera_grid.set_hexpand(True)
-        self.camera_grid.set_column_homogeneous(True)
-        self.camera_grid.set_valign(Gtk.Align.START)
+        self.camera_grid = self._new_camera_grid()
         camera_scroll = Gtk.ScrolledWindow()
         camera_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         camera_scroll.set_hexpand(True)
@@ -454,8 +451,77 @@ class MainWindowMixin:
         self.cell_layout = None
         self.selected_slot = 0
         self.video_slots = []
+        self.grid_context = "live"
+        self.grid_contexts = {}
+        self.playback_planned = {}
         self._render_video_grid()
         return workspace
+
+    @staticmethod
+    def _new_camera_grid():
+        grid = Gtk.Grid(column_spacing=1, row_spacing=1)
+        grid.set_hexpand(True)
+        grid.set_column_homogeneous(True)
+        grid.set_valign(Gtk.Align.START)
+        return grid
+
+    # ------------------------------------------------------------------ две видеосетки
+    # «Главный просмотр» и «Удалённое воспроизведение» — разные сетки, как в iVMS-4200:
+    # живые потоки продолжают идти, пока открыта вкладка воспроизведения, и наоборот.
+    GRID_ATTRS = ("streams", "video_slots", "camera_grid", "layout_count", "grid_columns", "grid_rows",
+                  "division", "cell_layout", "selected_slot", "maximized_slot", "slot_resources",
+                  "archive_player_slot")
+
+    def _switch_grid(self, name):
+        if self.__dict__.get("grid_context", "live") == name:
+            return
+        if self.maximized_slot is not None:
+            self._restore_maximized_slot()
+        self.grid_contexts[self.grid_context] = {a: self.__dict__.get(a) for a in self.GRID_ATTRS}
+        saved = self.grid_contexts.pop(name, None)
+        self.grid_context = name
+        fresh = saved is None
+        if fresh:
+            division = layouts.DIVISIONS["s4"]
+            saved = {"streams": {}, "video_slots": [], "camera_grid": self._new_camera_grid(),
+                     "layout_count": division.count, "grid_columns": division.cols, "grid_rows": division.rows,
+                     "division": division.key, "cell_layout": list(division.cells), "selected_slot": 0,
+                     "maximized_slot": None, "slot_resources": {}, "archive_player_slot": None}
+        for attr, value in saved.items():
+            setattr(self, attr, value)
+        self.camera_scroll.set_child(self.camera_grid)
+        if fresh:
+            self._render_video_grid()
+        self._update_layout_button()
+        self._update_door_bar()
+        self._update_stream_count()
+
+    def _all_grid_states(self):
+        """Потоки всех сеток (текущей и скрытой)."""
+        states = list(self.streams.values())
+        for saved in self.__dict__.get("grid_contexts", {}).values():
+            states += list((saved.get("streams") or {}).values())
+        return states
+
+    def _stop_grid(self, name):
+        """Остановить все потоки сетки name (в том числе скрытой)."""
+        current = self.__dict__.get("grid_context", "live")
+        if current != name and name not in self.__dict__.get("grid_contexts", {}):
+            return
+        self._switch_grid(name)
+        self.stop_all_streams()
+        if name == "playback":
+            self.playback_planned = {}
+        self._switch_grid(current)
+
+    def _place_camera(self, slot, camera, credentials):
+        """Камера в окно текущей сетки: живое видео или архив с момента под курсором шкалы."""
+        if self.__dict__.get("grid_context", "live") != "playback":
+            self._start_preview(slot, camera, credentials)
+            return
+        self.playback_planned[slot] = camera["id"]
+        self._select_slot(slot)
+        self._play_slot_at(slot, camera, dict(credentials), self.timeline.model.cursor)
 
     def _build_bottom_bar(self):
         bar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
@@ -708,7 +774,7 @@ class MainWindowMixin:
             self.toggle_fullscreen()
             return True
         ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
-        if ctrl and keyval in (Gdk.KEY_t, Gdk.KEY_T):
+        if ctrl and keyval in (Gdk.KEY_t, Gdk.KEY_T) and self.grid_context == "live":
             self._new_view_tab()
             return True
         if ctrl and keyval in (Gdk.KEY_s, Gdk.KEY_S):
@@ -801,13 +867,16 @@ class MainWindowMixin:
             self.timeline_area.set_visible(True)
         else:
             self.timeline_area.set_visible(not self.bar_collapsed)
+        if playback and not self.session.can("playback"):
+            self.notify("Нет прав на воспроизведение", error=True)
+            self.close_module_tab("playback")
+            return
+        self._switch_grid("playback" if playback else "live")
         self._syncing_tab = True
         try:
             self.set_bar_mode(mode)
         finally:
             self._syncing_tab = False
-        if playback and self.bar_mode != "playback":   # нет прав на воспроизведение
-            self.close_module_tab("playback")
 
     def _sync_tab_with_mode(self):
         """Воспроизведение запущено из поиска, карты, шкалы — показать вкладку воспроизведения."""
@@ -843,17 +912,12 @@ class MainWindowMixin:
     def close_module_tab(self, key):
         if key not in self.module_tabs.tabs:
             return
-        others = set(self.module_tabs.tabs) - {key}
         active = self.module_tabs.close(key)
-        if key == "playback" and self.bar_mode == "playback":
-            self._syncing_tab = True
-            try:
-                self.set_bar_mode("live")
-            finally:
-                self._syncing_tab = False
-        # Видео идёт, пока открыт «Главный просмотр» или «Удалённое воспроизведение».
-        if key in ("main_view", "playback") and not others & {"main_view", "playback"}:
-            self.stop_all_streams()
+        # Закрыли вкладку — закрываются и её окна с видео.
+        if key == "main_view":
+            self._stop_grid("live")
+        elif key == "playback":
+            self._stop_grid("playback")
         self._render_module_tabs()
         self._activate_module_page(active)
 
@@ -1054,6 +1118,8 @@ class MainWindowMixin:
     def _mark_view_dirty(self):
         if getattr(self, "_applying_tab", True) or not hasattr(self, "view_tabs"):
             return
+        if self.__dict__.get("grid_context", "live") != "live":   # виды — только у живого просмотра
+            return
         tab = self.view_tabs.current()
         if tab and not tab.dirty:
             tab.dirty = True
@@ -1194,6 +1260,8 @@ class MainWindowMixin:
         W.popover_menu(widget, items, x, y)
 
     def load_custom_view(self, view):
+        if self.__dict__.get("grid_context", "live") != "live":
+            self._show_module("main_view")
         self._capture_current_tab()
         tab, _created = self.view_tabs.open_saved(view)
         self._apply_tab(tab)
@@ -1684,28 +1752,23 @@ class MainWindowMixin:
     def set_bar_mode(self, mode):
         if mode == self.bar_mode:
             return
+        if mode == "playback" and not self.session.can("playback"):
+            self.notify("Нет прав на воспроизведение", error=True)
+            self._update_bar_controls()
+            return
         self.bar_mode = mode
         self.sync_playback.set_visible(mode == "playback")
         self._update_bar_controls()
+        model = self.timeline.model
         if mode == "live":
-            for slot, state in list(self.streams.items()):
-                if state.get("playback"):
-                    device, credentials = state["base_device"], state["credentials"]
-                    try:
-                        self._start_preview(slot, device, credentials)
-                    except Exception as exc:
-                        self.notify(str(exc), error=True)
-            self.timeline.model.cursor = datetime.now().astimezone()
-            self.timeline.model.center = self.timeline.model.cursor
+            model.cursor = datetime.now().astimezone()
         else:
-            if not self.session.can("playback"):
-                self.notify("Нет прав на воспроизведение", error=True)
-                self.live_mode_button.set_active(True)
-                return
-            moment = datetime.now().astimezone() - timedelta(minutes=5)
-            self.timeline.model.cursor = moment
-            if not getattr(self, "_quiet_playback_tab", False) and self._playback_targets():
-                self.timeline_seek(moment)
+            state = self.streams.get(self.selected_slot)
+            if state and state.get("playback") and state.get("archive_start"):
+                model.cursor = self._slot_position(state)
+            elif model.cursor > datetime.now().astimezone() - timedelta(minutes=1):
+                model.cursor = datetime.now().astimezone() - timedelta(minutes=5)
+        model.center = model.cursor
         self._load_timeline_segments()
         self.timeline.queue_draw()
         self._sync_tab_with_mode()
@@ -1747,12 +1810,18 @@ class MainWindowMixin:
             self.playback_mode_button.set_active(True)
         self.timeline_seek(moment)
 
+    def _planned_cameras(self):
+        """{окно: id камеры} — что должно стоять в окнах текущей сетки."""
+        if self.__dict__.get("grid_context", "live") == "playback":
+            return dict(self.playback_planned)
+        tab = self.view_tabs.current() if hasattr(self, "view_tabs") else None
+        return {m["slot"]: m["device_id"] for m in (tab.mapping if tab else []) if m["kind"] == views.KIND_CAMERA}
+
     def _playback_targets(self):
         """[(slot, device, credentials)] для воспроизведения: выбранное окно или все при синхронном режиме."""
         slots = range(self.layout_count) if self.sync_playback.get_active() else [self.selected_slot]
         targets = []
-        tab = self.view_tabs.current() if hasattr(self, "view_tabs") else None
-        planned = {m["slot"]: m["device_id"] for m in (tab.mapping if tab else []) if m["kind"] == views.KIND_CAMERA}
+        planned = self._planned_cameras()
         for slot in slots:
             state = self.streams.get(slot)
             device = state["base_device"] if state else next(
@@ -1765,13 +1834,25 @@ class MainWindowMixin:
         return targets
 
     def timeline_seek(self, moment):
-        if self.bar_mode != "playback":
-            self.bar_mode = "playback"
-            self.sync_playback.set_visible(True)
-            self.playback_mode_button.set_active(True)
-            self._update_bar_controls()
-            self._sync_tab_with_mode()
-        targets = self._playback_targets()
+        carried = None
+        if self.__dict__.get("grid_context", "live") != "playback":
+            # Воспроизведение начато из живого просмотра (событие, карта, дата):
+            # те же камеры открываются в тех же окнах сетки воспроизведения.
+            carried = self._playback_targets()
+            self.open_playback_tab()
+            if self.bar_mode != "playback":
+                return
+            if carried:
+                need = max(slot for slot, _d, _c in carried) + 1
+                if need > self.layout_count:
+                    count = next((c for c in (1, 4, 9, 16, 25, 36, 49, 64) if c >= need), 64)
+                    self._set_layout(None, count)
+                carried = [t for t in carried if t[0] < self.layout_count]
+                for slot, device, _c in carried:
+                    self.playback_planned[slot] = device["id"]
+                if carried:
+                    self._select_slot(carried[0][0])
+        targets = carried if carried else self._playback_targets()
         if not targets:
             self.notify("Выберите окно с камерой для воспроизведения")
             return
@@ -1922,8 +2003,7 @@ class MainWindowMixin:
         state = self.streams.get(self.selected_slot)
         if state:
             return state["base_device"]
-        tab = self.view_tabs.current() if hasattr(self, "view_tabs") else None
-        planned = {m["slot"]: m["device_id"] for m in (tab.mapping if tab else []) if m["kind"] == views.KIND_CAMERA}
+        planned = self._planned_cameras()
         return next((d for d in self.devices if d["id"] == planned.get(self.selected_slot)), None)
 
     def _load_timeline_segments(self):
