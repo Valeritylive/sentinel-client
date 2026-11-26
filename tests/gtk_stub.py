@@ -144,6 +144,7 @@ def install():
         Gtk.__dict__[n] = type(n, (Widget,), {})
     other = NS({})
     repo.Gtk, repo.Gdk, repo.GLib, repo.GObject, repo.Gst = Gtk, other, other, other, other
+    repo.Graphene, repo.Pango = other, other
     gi.repository = repo
     sys.modules["gi"] = gi
     sys.modules["gi.repository"] = repo

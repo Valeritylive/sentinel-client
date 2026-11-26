@@ -645,7 +645,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         return page
 
     def _emap_page(self):
-        page = self._page("КАРТА ОБЪЕКТА", "E-map", "Камеры и их расположение на плане",
+        page = self._page("КАРТА ОБЪЕКТА", "E-map", "План объекта или онлайн-карта с точками камер",
                           self._button("＋ Добавить карту", self.add_map, primary=True))
         controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.map_choice = Gtk.DropDown.new_from_strings([])
@@ -655,13 +655,16 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         controls.append(self.map_choice)
         controls.append(self._button("＋ Точка", self.add_map_hotspot))
         controls.append(self._button("🛡 Охрана точек карты", self._map_arming_menu))
+        controls.append(self._button("Свойства карты", self.edit_map))
         controls.append(self._button("Удалить карту", self.delete_map))
         page.append(controls)
-        self.map_status = make_label("Добавьте изображение плана или карты, затем разместите точки камер.", "muted")
+        page.append(self._map_geo_bar())
+        self.map_status = make_label("Добавьте план объекта или онлайн-карту, затем разместите точки камер.", "muted")
         page.append(self.map_status)
         self.map_canvas = Gtk.Overlay()
         self.map_canvas.set_hexpand(True)
         self.map_canvas.set_vexpand(True)
+        self.map_canvas.set_overflow(Gtk.Overflow.HIDDEN)
         self.map_canvas.add_css_class("section-card")
         self.map_picture = Gtk.Picture()
         self.map_picture.set_can_shrink(True)
@@ -671,6 +674,13 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         self.map_points.set_hexpand(True)
         self.map_points.set_vexpand(True)
         self.map_canvas.add_overlay(self.map_points)
+        self.map_attribution = make_label("", "map-attribution")
+        self.map_attribution.set_halign(Gtk.Align.END)
+        self.map_attribution.set_valign(Gtk.Align.END)
+        self.map_attribution.set_can_target(False)
+        self.map_attribution.set_visible(False)
+        self.map_canvas.add_overlay(self.map_attribution)
+        self._install_map_gestures()
         page.append(self.map_canvas)
         return page
 
@@ -740,47 +750,6 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
             self.notify("На карте нет точек или нет прав на постановку на охрану")
             return
         W.popover_menu(self.map_choice, items)
-
-    def add_map(self, *_args):
-        chooser = Gtk.FileChooserNative.new("Выберите изображение карты", self, Gtk.FileChooserAction.OPEN,
-                                            "Добавить", "Отмена")
-        chooser.connect("response", self._add_map_file)
-        chooser.show()
-
-    def _add_map_file(self, chooser, response):
-        file = chooser.get_file()
-        if response != Gtk.ResponseType.ACCEPT or not file:
-            chooser.destroy()
-            return
-        path = file.get_path()
-        name_entry = Gtk.Entry(text=Path(path).stem)
-        dialog = Gtk.Dialog(title="Название карты", transient_for=self, modal=True)
-        dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
-        dialog.add_button("Сохранить", Gtk.ResponseType.ACCEPT)
-        name_entry.set_margin_top(14); name_entry.set_margin_bottom(14)
-        name_entry.set_margin_start(14); name_entry.set_margin_end(14)
-        dialog.get_content_area().append(name_entry)
-        def response_cb(dlg, result):
-            if result == Gtk.ResponseType.ACCEPT:
-                try:
-                    with database() as db:
-                        db.execute("INSERT INTO maps(name,image_path) VALUES(?,?)", (name_entry.get_text().strip(), path))
-                    self._refresh_maps()
-                except sqlite3.IntegrityError:
-                    self.notify("Карта с таким именем уже существует")
-            dlg.close()
-        dialog.connect("response", response_cb)
-        dialog.present()
-        chooser.destroy()
-
-    def delete_map(self, *_args):
-        selected = self.map_choice.get_selected()
-        if selected == Gtk.INVALID_LIST_POSITION or selected >= len(getattr(self, "maps", [])):
-            return
-        with database() as db:
-            db.execute("DELETE FROM map_hotspots WHERE map_id=?", (self.maps[selected]["id"],))
-            db.execute("DELETE FROM maps WHERE id=?", (self.maps[selected]["id"],))
-        self._refresh_maps()
 
     def _access_credentials(self):
         selected = self.access_device.get_selected()
@@ -1372,7 +1341,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         self._select_slot(index)
         popover = Gtk.Popover()
         popover.set_parent(pane)
-        popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
+        popover.set_pointing_to(W.point_rect(x, y))
         actions = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         options = (("Снимок", self.capture_selected), ("Запись начать/остановить", self.toggle_recording),
                    ("Найти записи камеры", lambda: self._open_archive_for_device(
@@ -1399,7 +1368,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
     def _show_camera_menu(self, device, widget, x, y):
         popover = Gtk.Popover()
         popover.set_parent(widget)
-        popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
+        popover.set_pointing_to(W.point_rect(x, y))
         actions = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         mode = getattr(self, "stream_mode", layouts.STREAM_AUTO)
 

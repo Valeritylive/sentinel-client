@@ -224,15 +224,23 @@ class BoardMixin:
     def _board_map(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         with storage.database() as db:
-            first = db.execute("SELECT id, name, image_path FROM maps ORDER BY id LIMIT 1").fetchone()
+            first = db.execute("SELECT * FROM maps ORDER BY id LIMIT 1").fetchone()
             total = db.execute("SELECT COUNT(*) FROM maps").fetchone()[0]
             spots = db.execute("SELECT COUNT(*) FROM map_hotspots WHERE map_id=?",
                                (first["id"],)).fetchone()[0] if first else 0
         if not first:
             box.append(W.label("Карт нет. Добавьте план объекта в разделе «Карта».", "muted", wrap=True))
             return box
-        picture = Gtk.Picture.new_for_filename(first["image_path"])
-        picture.set_can_shrink(True)
+        if first["kind"] == "online":
+            import sentinel_mapview as mapview
+            picture = mapview.TileMapView()
+            picture.set_provider(first["provider"] or None)
+            if first["center_lat"] is not None:
+                picture.set_view(first["center_lon"], first["center_lat"], first["zoom"] or 15, notify=False)
+            picture.set_can_target(False)
+        else:
+            picture = Gtk.Picture.new_for_filename(first["image_path"])
+            picture.set_can_shrink(True)
         picture.set_size_request(300, 160)
         button = Gtk.Button()
         button.set_has_frame(False)
