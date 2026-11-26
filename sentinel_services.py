@@ -191,6 +191,8 @@ class ServicesMixin:
                                    holidays=holidays) if arming.event_raises_alarms(event) else []
         if event.get("state") != "inactive":
             self._flash_map_device(event.get("device_id"), alarm=bool(rules))
+            if event.get("event_type") == "access" and hasattr(self, "_on_access_event"):
+                self._on_access_event(event)
         for rule in rules:
             record_id = alarms.create_alarm_record(rule, event, event_id)
             self._run_linkage(rule, event, record_id)
@@ -529,6 +531,8 @@ class ServicesMixin:
             if entry["kind"] == "door":
                 self._place_resource(slot, entry)
         self._update_door_bar()
+        if hasattr(self, "access_doors_holder"):
+            self._render_access_doors()
         return False
 
     # ================================================================== применение уровней доступа
@@ -538,7 +542,7 @@ class ServicesMixin:
         jobs = []
         for person, device_id, doors in plan:
             device = devices.get(device_id)
-            credentials = self.session_credentials.get(device_id) if device else None
+            credentials = self._get_device_credentials(device) if device else None
             jobs.append((person, device, credentials, doors, device_id))
 
         def worker():

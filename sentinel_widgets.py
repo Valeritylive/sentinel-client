@@ -96,6 +96,15 @@ expander title { padding: 6px 4px; }
 .status-badge.ok { background: alpha(#3fbf6f, 0.18); color: #6fd896; }
 .status-badge.bad { background: alpha(#e8232c, 0.2); color: #ff6b70; }
 .status-badge.unknown { background: #2e2f34; color: #9a9ca3; }
+.status-badge.warn { background: alpha(#f0a020, 0.2); color: #f5bf55; }
+.status-badge.muted { background: #2a2b30; color: #8d8f96; }
+.warning-text { color: #f5bf55; font-weight: bold; }
+.door-card { background: #202126; border: 1px solid #34363c; border-left: 4px solid #6b6d74;
+             border-radius: 6px; padding: 8px 10px; }
+.door-card.door-open { border-left-color: #3fbf6f; }
+.door-card.door-closed { border-left-color: #4a8fe0; }
+.door-card.door-unknown { border-left-color: #6b6d74; }
+.door-state { font-weight: bold; }
 .table-head { color: #8b8d93; font-weight: 600; padding: 6px 4px; border-bottom: 1px solid #333; }
 .table-cell { padding: 6px 4px; border-bottom: 1px solid #2a2b2f; }
 .system-tabs button { background: transparent; border: none; border-radius: 0; padding: 8px 12px; }

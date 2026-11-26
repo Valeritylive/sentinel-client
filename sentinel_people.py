@@ -448,7 +448,8 @@ def save_access_level(name, doors, schedule_id=None, level_id=None, remark=""):
                               (name, schedule_id, json.dumps(clean), remark)).lastrowid
         db.execute("UPDATE access_levels SET name=?,schedule_id=?,doors=?,remark=? WHERE id=?",
                    (name, schedule_id, json.dumps(clean), remark, level_id))
-        return level_id
+    mark_pending(level_ids=[level_id])
+    return level_id
 
 
 def delete_access_level(level_id):
@@ -472,6 +473,7 @@ def assign_levels(person_ids=(), department_ids=(), level_ids=(), replace=False)
             for lid in level_ids:
                 db.execute("INSERT OR IGNORE INTO department_access_levels(department_id,level_id) VALUES(?,?)",
                            (did, lid))
+    mark_pending(person_ids, department_ids)
 
 
 def clear_levels(person_ids=(), department_ids=()):
@@ -517,6 +519,31 @@ def set_apply_status(person_id, device_id, status, message=""):
             VALUES(?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(person_id,device_id) DO UPDATE
             SET status=excluded.status, message=excluded.message, updated_at=excluded.updated_at""",
                    (person_id, device_id, status, message))
+
+
+def mark_pending(person_ids=(), department_ids=(), level_ids=()):
+    """Отметить «не применено» у персон, чьи права изменились (индикатор и «Применить изменения»)."""
+    ids = {int(i) for i in person_ids}
+    with storage.database() as db:
+        for did in department_ids:
+            ids |= {r[0] for r in db.execute("SELECT id FROM persons WHERE department_id=?", (did,))}
+        for lid in level_ids:
+            ids |= {r[0] for r in db.execute("SELECT person_id FROM person_access_levels WHERE level_id=?", (lid,))}
+            ids |= {r[0] for r in db.execute("""SELECT p.id FROM persons p JOIN department_access_levels d
+                ON d.department_id=p.department_id WHERE d.level_id=?""", (lid,))}
+    if not ids:
+        return 0
+    persons = [p for p in load_persons() if p["id"] in ids]
+    for person, device_id, _doors in apply_plan(persons):
+        set_apply_status(person["id"], device_id, "pending", "права изменены, не применено")
+    return len(persons)
+
+
+def pending_persons():
+    """Персоны, у которых есть неприменённые или неудачные записи."""
+    with storage.database() as db:
+        ids = {r[0] for r in db.execute("SELECT DISTINCT person_id FROM access_apply_status WHERE status!='applied'")}
+    return [p for p in load_persons() if p["id"] in ids]
 
 
 def apply_summary():

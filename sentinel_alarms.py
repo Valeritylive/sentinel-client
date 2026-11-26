@@ -121,7 +121,8 @@ def parse_event_xml(payload, device):
     plate = values.get("licensePlate") or values.get("plateNo") or ""
     details = {k: values[k] for k in ("eventDescription", "licensePlate", "vehicleType", "color",
                                       "vehicleLogoRecog", "direction", "targetType", "employeeNoString",
-                                      "cardNo", "doorNo", "major", "minor", "name", "ipAddress")
+                                      "cardNo", "doorNo", "cardReaderNo", "major", "minor", "name", "ipAddress",
+                                      "attendanceStatus", "currentVerifyMode")
                if values.get(k)}
     channel = values.get("channelID") or values.get("dynChannelID") or values.get("doorNo") or ""
     return {

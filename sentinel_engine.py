@@ -28,6 +28,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 
+import sentinel_access_rules as access_rules
 import sentinel_alarms as alarms
 import sentinel_arming as arming
 import sentinel_hikconnect as hikconnect
@@ -152,6 +153,7 @@ class Engine:
         self._recent: dict[tuple, float] = {}
         self._credentials: dict[tuple, dict] = {}
         self.cloud_errors: dict[int, str] = {}
+        self.first_person = access_rules.FirstPersonTracker()
 
     # ------------------------------------------------------------ жизненный цикл
     def start(self):
@@ -161,7 +163,8 @@ class Engine:
                 ("cloud", self.cloud_interval, self.sync_cloud_accounts, 10),
                 ("recorder", 30, self.recorder_tick, 15),
                 ("time-sync", 600, self.time_sync_tick, 30),
-                ("maintenance", 3600, self.maintenance_tick, 60)):
+                ("maintenance", 3600, self.maintenance_tick, 60),
+                ("access-rules", 60, self.access_rules_tick, 20)):
             thread = threading.Thread(target=self._loop, args=(name, interval, func, delay), daemon=True,
                                       name=f"sentinel-{name}")
             thread.start()
@@ -360,6 +363,8 @@ class Engine:
         self.bus.publish("event", dict(event, id=event_id, title=alarms.event_title(event["event_type"])))
         with storage.database() as db:
             holidays = [dict(r) for r in db.execute("SELECT * FROM holidays")]
+        if event.get("event_type") == "access" and event.get("state") != "inactive":
+            self._access_rules_event(event)
         records = []
         rules = alarms.match_rules(event, alarms.load_rules(True), people.vehicle_index(), people.get_schedule,
                                    holidays=holidays) if arming.event_raises_alarms(event) else []
@@ -369,6 +374,35 @@ class Engine:
             self._run_linkage(rule, event, record_id)
             self.bus.publish("alarm", alarms.get_alarm_record(record_id))
         return records
+
+    # ------------------------------------------------------------ правила доступа, выполняемые сервером
+    def _access_rules_event(self, event):
+        try:
+            rules = access_rules.load_rules(access_rules.FIRST_PERSON)
+            if not rules:
+                return
+            employees = {p["id"]: str(p["employee_no"]) for p in people.load_persons()}
+            for device_id, door, command, rule in self.first_person.on_event(event, rules, employees):
+                self._door_command(device_id, door, command, rule)
+        except Exception:
+            log.exception("Правило «первый вошедший» не выполнено")
+
+    def access_rules_tick(self):
+        if self.first_person.opened:
+            for device_id, door, command, rule in self.first_person.due_resume(
+                    access_rules.load_rules(access_rules.FIRST_PERSON)):
+                self._door_command(device_id, door, command, rule)
+
+    def _door_command(self, device_id, door, command, rule):
+        device = self._device(device_id)
+        credentials = self.credentials_for(device) if device else None
+        if not credentials:
+            log.warning("Дверь %s: нет пароля контроллера %s", door, device_id)
+            return
+        isapi_request(device, credentials, f"/ISAPI/AccessControl/RemoteControl/door/{door}", "PUT",
+                      people.door_command_xml(command))
+        alarms.log_operation("server", f"Правило «{rule['name']}»: дверь {door} — {people.DOOR_TITLES[command]}",
+                             device["host"])
 
     def _device(self, device_id):
         return next((d for d in self.devices() if d["id"] == device_id), None)

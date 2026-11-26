@@ -57,6 +57,7 @@ from sentinel_tilebar import TileBarMixin
 from sentinel_board import BoardMixin
 from sentinel_viewshare import ViewShareMixin
 from sentinel_alarmmap import AlarmMapMixin
+from sentinel_accesscenter import AccessCenterMixin
 import sentinel_layouts as layouts
 import sentinel_protocols as protocols
 import sentinel_shell as shell
@@ -116,7 +117,7 @@ def make_label(text: str, css_class: str | None = None):
     return label
 
 
-class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, MainWindowMixin, ServicesMixin, TileBarMixin, Gtk.ApplicationWindow):
+class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixin, MainWindowMixin, ServicesMixin, TileBarMixin, Gtk.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Sentinel — видеонаблюдение")
         self.set_resizable(True)
@@ -666,7 +667,7 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, MainWindowMixin,
         page.append(self.map_canvas)
         return page
 
-    def _access_page(self):
+    def _access_log_page(self):
         page = self._page("ДВЕРИ И СОБЫТИЯ", "Контроль доступа", "Управление дверью и журнал событий контроллера")
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         panel.add_css_class("section-card")

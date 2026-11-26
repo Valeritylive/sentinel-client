@@ -314,3 +314,57 @@ class ServerViewsSmoke(ShellSmoke):
         opened = self.win.view_tabs.current()
         self.assertEqual(opened.server_view_id, 43)
         self.assertEqual(opened.mapping[0]["device_id"], self.win.devices[1]["id"])
+
+
+class AccessCenterSmoke(ShellSmoke):
+    def test_access_center_tabs_render_and_feed(self):
+        import sentinel_access_rules as ar
+        import sentinel_visitors as visitors
+        self._add("10.0.0.9", [1], "Проходная", category="access", doors=2)
+        w = self.win
+        ctrl = next(d for d in w.devices if d["category"] == "access")
+        w._show_module("access")
+        for page in range(5):
+            w.access_notebook.get_current_page = lambda p=page: p
+            w.refresh_access_center()
+        ar.save_rule(ar.INTERLOCK, "Шлюз", ctrl["id"], {"groups": [[1, 2]]}, door_count=2)
+        w._update_access_apply_indicator()
+        self.assertIn("правил: 1", w.access_apply_label.get_text())
+        pid = people.save_person({"name": "Иван", "employee_no": "7"})
+        ar.save_rule(ar.FIRST_PERSON, "Утро", ctrl["id"], {"door": 1, "person_ids": [pid], "until": "23:59"},
+                     door_count=2)
+        sent = []
+        w.door_command = lambda d, n, c, quiet=False: sent.append((n, c))
+        w._access_credentials_for = lambda d: {"username": "a", "password": "b"}
+        w.access_notebook.get_current_page = lambda: 0
+        event = {"time": "2026-11-26T08:00:00", "device_id": ctrl["id"], "device_name": "Проходная",
+                 "channel": "1", "raw_type": "AccessControllerEvent", "event_type": "access", "category": "event",
+                 "state": "active", "plate": "", "details": {"employeeNoString": "7", "doorNo": "1", "minor": "75"}}
+        w.handle_event(event)
+        self.assertEqual(sent, [(1, "always_open")])
+        self.assertEqual(w.access_feed[0]["who"], "Иван")
+        self.assertIn("первый вошедший", w.access_feed[0]["note"])
+
+    def test_visitor_check_in_out_from_ui(self):
+        import sentinel_visitors as visitors
+        w = self.win
+        w._show_module("access")
+        visitors.set_approval_required(False)
+        vid = visitors.register({"name": "Гость"}, "admin")
+        removed = []
+        w.remove_person_from_devices = lambda emp, devs: removed.append(emp)
+        w.check_in_visitor(vid)
+        self.assertEqual(visitors.get(vid)["status"], visitors.INSIDE)
+        w.print_badge(vid)
+        self.assertTrue((storage.DATA / "badges" / f"badge_{visitors.get(vid)['badge']}.html").is_file())
+        w.check_out_visitor(vid)
+        self.assertEqual(removed, [f"V{vid}"])
+
+    def test_attendance_render(self):
+        w = self.win
+        w._show_module("access")
+        people.save_person({"name": "Анна", "employee_no": "21"})
+        w.render_attendance()
+        self.assertTrue(w.att_records)
+        w.att_mode.get_selected = lambda: 1
+        w.render_attendance()

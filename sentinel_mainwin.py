@@ -708,7 +708,7 @@ class MainWindowMixin:
         elif page == "emap":
             self._refresh_maps()
         elif page == "access":
-            self._refresh_archive_choices()
+            self.refresh_access_center()
         elif page == "dashboard":
             self._render_report()
         elif page == "alarms":
