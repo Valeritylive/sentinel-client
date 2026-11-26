@@ -264,3 +264,15 @@ def player_factories(archive: bool) -> tuple[str, ...]:
 def archive_stream() -> str:
     """Поток, из которого NVR отдаёт архив: только основной (tracks/X01)."""
     return "main"
+
+
+# Hikvision отдаёт в SDP диапазон a=range:clock=…; без onvif-mode rtspsrc переводит
+# его в NPT и шлёт PLAY с Range: npt=4004672413-… (секунды от 1900 г.). Регистратор
+# такой диапазон не понимает и играет файл записи с начала (на минуты раньше нужного).
+# В onvif-mode PLAY уходит с Range: clock=<starttime>-<endtime>, и NVR начинает точно.
+ARCHIVE_RTSP_OPTIONS = (("onvif-mode", "true"), ("protocols", "tcp"))
+
+
+def archive_rtsp_options(uri: str) -> tuple[tuple[str, str], ...]:
+    """Свойства rtspsrc для архива (пусто для файлов и не-RTSP)."""
+    return ARCHIVE_RTSP_OPTIONS if (uri or "").lower().startswith("rtsp") else ()

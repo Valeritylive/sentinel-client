@@ -2250,10 +2250,13 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         if device["protocol"] == "hikvision":
             stream_num = int(device["channel"]) * 100 + layouts.STREAM_SUFFIX.get(device["stream"], 1)
             if playback:
-                start = self._utc_timestamp(playback[0])
-                end = self._utc_timestamp(playback[1])
-                if end <= start:
+                # Время в часах регистратора: NVR с timeType=local понимает «Z» как своё местное время.
+                clock = self.device_clock(device)
+                start_moment = datetime.fromisoformat(playback[0]).astimezone()
+                end_moment = datetime.fromisoformat(playback[1]).astimezone()
+                if end_moment <= start_moment:
                     raise ValueError("Время окончания должно быть позже начала")
+                start, end = clock.rtsp(start_moment), clock.rtsp(end_moment)
                 path = f"Streaming/tracks/{stream_num}?" + urllib.parse.urlencode({"starttime": start, "endtime": end})
             else:
                 path = f"Streaming/Channels/{stream_num}"
@@ -3272,6 +3275,8 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
                  ) else 0.04}
         sink.connect("new-sample", self._on_new_sample, state)
         pipeline.set_property("uri", uri)
+        if archive and protocols.archive_rtsp_options(uri):
+            pipeline.connect("source-setup", self._archive_source_setup, uri)
         pipeline.set_property("video-sink", sink)
         pipeline.set_property("mute", True)
         pipeline.set_property("volume", 1.0)
@@ -3302,6 +3307,13 @@ class SentinelWindow(BoardMixin, ViewShareMixin, AlarmMapMixin, AccessCenterMixi
         self._sync_tile_toolbar(slot_index)
         if hasattr(self, "timeline"):
             self._load_timeline_segments()
+
+    @staticmethod
+    def _archive_source_setup(_pipeline, source, uri):
+        """rtspsrc архива: Range: clock=… вместо npt, иначе NVR играет файл с начала."""
+        for name, value in protocols.archive_rtsp_options(uri):
+            if source.find_property(name) is not None:
+                Gst.util_set_object_arg(source, name, value)
 
     def _on_new_sample(self, sink, state):
         sample = sink.emit("pull-sample")
